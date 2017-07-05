@@ -1,0 +1,15 @@
+!<Configuration>
+host_defs:
+- !<HostDefinition>
+  count: 100
+  desc: NGINX
+  image: nginx:latest
+  network: docker-proxy
+  ports:
+  - 80
+  - 443
+naming: !<Naming>
+  allowable_host_chars: '[^a-z0-9]'
+  max_host_len: 20
+  min_host_len: 2
+  word_file: en.txt
