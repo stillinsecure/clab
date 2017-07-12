@@ -123,7 +123,7 @@ class NFQueueManager:
     def handle_icmp(self, ip_hdr):
 
         icmp_reply = ip.IP(bytes(ip_hdr))
-        icmp_reply.src = ip_hdr.dst
+        icmp_reply.src = IPAddress.str_to_bytes('192.168.1.9')
         icmp_reply.dst = ip_hdr.src
         icmp_reply.data.type = icmp.ICMP_ECHOREPLY
         icmp_reply.sum = 0

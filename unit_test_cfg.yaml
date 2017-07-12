@@ -1,10 +1,10 @@
 !<Configuration>
 host_defs:
 - !<HostDefinition>
-  count: 100
+  count: 1000
   desc: NGINX
   image: nginx:latest
-  network: docker-proxy
+  network: network1
   ports:
   - 80
   - 443

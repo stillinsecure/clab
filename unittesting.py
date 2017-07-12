@@ -27,11 +27,13 @@ class TestNaming(unittest.TestCase):
         host_names = naming.generate_host_names(config.naming, 100)
         self.assertEqual(len(host_names), 100, "Expecting 100 host names")
 
-
+'''
 class TestContainerManager(unittest.TestCase):
     def test_create_containers(self):
         config = Configuration.load(cfg_file)
         mgr = ContainerManager()
+        mgr.create_network(1000)
+        #return
         mgr.create_containers(config.host_defs, config.naming)
 
     def test_build_container_map(self):
@@ -54,7 +56,7 @@ class TestAsyncDocker(unittest.TestCase):
             result = loop.run_until_complete(self.start_stop_container('jested', docker))
         finally:
             docker.close()
-
+'''
 
 
 if __name__ == '__main__':

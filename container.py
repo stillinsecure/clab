@@ -6,6 +6,7 @@ import utility
 import socket
 import asyncio
 import asyncdocker
+import docker
 from models import Container, Port
 from collections import namedtuple
 from datetime import datetime
@@ -117,12 +118,14 @@ class ContainerManager:
             container_map[port][ip] = container.name
 
         return container_map
-'''
+
     def pull_images(self, host_defs_cfg):
+        client = docker.APIClient(base_url='unix://var/run/docker.sock')
+
         # Pull down images defined in the host defs if they are
         # not already present on the local system
         for host_def in host_defs_cfg:
-            self.client.pull(host_def.image)
+            client.pull(host_def.image)
 
     def generate_mac(self, ip):
         mac = '02:42'
@@ -130,7 +133,22 @@ class ContainerManager:
             mac += ':{:02x}'.format(int(octet))
         return mac
 
+    def create_network(self, count):
+        client = docker.APIClient(base_url='unix://var/run/docker.sock')
+
+        network = client.networks.get('network1')
+
+        if network is not None:
+            network.remove()
+
+        subnet = utility.IPAddress.generate_cidr('10.0.0.0', count)
+        ipam_pool = docker.types.IPAMPool(subnet=subnet, gateway='10.0.0.1')
+        ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
+        client.create_network(name="network1", ipam=ipam_config, internal=True)
+
     def create_containers(self, host_defs_cfg, naming_cfg):
+        client = docker.APIClient(base_url='unix://var/run/docker.sock')
+
         Container.delete()
 
         # Make sure the defined images are available
@@ -148,7 +166,7 @@ class ContainerManager:
 
             # Determine the ip range in order to specify a valid ip
             # address for each container
-            network = self.client.inspect_network(host_def.network)
+            network = client.inspect_network(host_def.network)
             subnet = network['IPAM']['Config'][0]['Subnet']
             ip_range = list(netaddr.IPSet([subnet, ]))
             ip_range.reverse()
@@ -157,24 +175,24 @@ class ContainerManager:
                 host_name = host_names.pop()
                 ip = str(ip_range.pop())
                 mac = self.generate_mac(ip)
-                endpoint_config = self.client.create_endpoint_config(ipv4_address=ip)
-                networking_config = self.client.create_networking_config({host_def.network : endpoint_config})
-                container_id = self.client.create_container(image=host_def.image,
-                                                         detach=True,
-                                                         hostname=host_name,
-                                                         name=host_name,
-                                                         ports=host_def.ports,
-                                                         networking_config=networking_config,
-                                                         mac_address=mac)
+                endpoint_config = client.create_endpoint_config(ipv4_address=ip)
+                networking_config = client.create_networking_config({host_def.network : endpoint_config})
+                container_id = client.create_container(image=host_def.image,
+                                                       detach=True,
+                                                       hostname=host_name,
+                                                       name=host_name,
+                                                       ports=host_def.ports,
+                                                       networking_config=networking_config,
+                                                       mac_address=mac)
 
-                container = self.client.inspect_container(container_id)
+                container = client.inspect_container(container_id)
                 # Persist the container info to the db with the ports
                 # Ports are used to determine what listeners to create
                 new_container = Container.create(container_id=container["Id"],
                                                  name=host_name, ip=ip, mac=mac)
                 for port in host_def.ports:
                     Port.create(container=new_container.id, value=port)
-'''
+
 
 
 
