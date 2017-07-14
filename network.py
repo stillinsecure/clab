@@ -50,6 +50,7 @@ class NFQueueManager:
             ip = IPAddress.str_to_int(client_addr[0])
             key = self.get_key(client_addr[1], str(ip))
             container_addr = self.source_addrs[key]
+            print(container_addr)
             start_data = await client_reader.read(2048)
         except ConnectionResetError:
             client_writer.close()

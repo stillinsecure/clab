@@ -3,17 +3,17 @@ import yaml
 class Network(yaml.YAMLObject):
     yaml_tag = u'Network'
 
-    def __init__(self, name, ):
-        pass
+    def __init__(self, name, network, gateway):
+        self.network = network
+        self.gateway = gateway
 
 class HostDefinition(yaml.YAMLObject):
     yaml_tag = u"HostDefinition"
 
-    def __init__(self, desc, image, count, network, ports):
+    def __init__(self, desc, image, count, ports):
         self.desc = desc
         self.image = image
         self.count = count
-        self.network = network
         self.ports = ports
 
 

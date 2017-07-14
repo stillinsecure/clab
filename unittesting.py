@@ -32,7 +32,7 @@ class TestContainerManager(unittest.TestCase):
     def test_create_containers(self):
         config = Configuration.load(cfg_file)
         mgr = ContainerManager()
-        mgr.create_network(1000)
+
         #return
         mgr.create_containers(config.host_defs, config.naming)
 

@@ -134,17 +134,20 @@ class ContainerManager:
         return mac
 
     def create_network(self, count):
-        client = docker.APIClient(base_url='unix://var/run/docker.sock')
+        client = docker.from_env()
 
-        network = client.networks.get('network1')
-
-        if network is not None:
+        try:
+            network = client.networks.get('network1')
             network.remove()
+        except docker.errors.NotFound:
+            pass
 
         subnet = utility.IPAddress.generate_cidr('10.0.0.0', count)
         ipam_pool = docker.types.IPAMPool(subnet=subnet, gateway='10.0.0.1')
         ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
-        client.create_network(name="network1", ipam=ipam_config, internal=True)
+        network = client.networks.create(name="network1", ipam=ipam_config)
+
+        return network
 
     def create_containers(self, host_defs_cfg, naming_cfg):
         client = docker.APIClient(base_url='unix://var/run/docker.sock')

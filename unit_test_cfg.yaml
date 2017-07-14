@@ -1,15 +1,32 @@
 !<Configuration>
 host_defs:
 - !<HostDefinition>
-  count: 1000
+  count: 1
   desc: NGINX
   image: nginx:latest
-  network: network1
   ports:
   - 80
   - 443
+- !<HostDefinition>
+  count: 1
+  desc: Ubuntu SSH
+  image: rastasheep/ubuntu-sshd
+  ports:
+  - 22
+- !<HostDefinition>
+  count: 1
+  desc: MySQL
+  image: osixia/openldap
+  ports:
+  - 3306
+
 naming: !<Naming>
   allowable_host_chars: '[^a-z0-9]'
   max_host_len: 20
   min_host_len: 2
   word_file: en.txt
+
+network: !<Network>
+  network: 10.0.0.0
+  gateway: 10.0.0.1
+  name: crouter
