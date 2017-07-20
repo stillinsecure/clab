@@ -1,49 +1,45 @@
 import yaml
 
-class Network(yaml.YAMLObject):
-    yaml_tag = u'Network'
+class Network():
 
-    def __init__(self, name, network, gateway):
-        self.network = network
-        self.gateway = gateway
+    def __init__(self, cfg_dict):
+        cfg = cfg_dict['network']
+        self.address = cfg['address']
+        self.name = cfg['name']
 
-class HostDefinition(yaml.YAMLObject):
-    yaml_tag = u"HostDefinition"
+class Image():
 
-    def __init__(self, desc, image, count, ports):
-        self.desc = desc
-        self.image = image
-        self.count = count
-        self.ports = ports
+    def __init__(self, cfg_dict):
+        self.desc = cfg_dict['desc']
+        self.name = cfg_dict['name']
+        self.count = cfg_dict['count']
 
+class Naming():
 
-class NamingConfig(yaml.YAMLObject):
-    yaml_tag = u"Naming"
-
-    def __init__(self, word_file="en.txt",
-                 min_host_len=5,
-                 max_host_len=10,
-                 allowable_host_chars="[^a-z0-9]"):
-        self.word_file = word_file
-        self.min_host_len = min_host_len
-        self.max_host_len = max_host_len
-        self.allowable_host_chars = allowable_host_chars
+    def __init__(self, cfg_dict):
+        cfg = cfg_dict['naming']
+        self.word_file = cfg['word_file']
+        self.min_host_len = cfg['min_host_len']
+        self.max_host_len = cfg['max_host_len']
+        self.allowable_host_chars = cfg['allowable_host_chars']
 
 
-class Configuration(yaml.YAMLObject):
-    yaml_tag = u'Configuration'
+class Configuration():
 
-    def __init__(self, host_defs,
-                 naming=NamingConfig()):
-        self.host_defs = host_defs
-        self.naming = naming
+    def __init__(self, file_name):
+        self.images = []
+        self.naming = None
+        self.network = None
+        self.__load(file_name)
 
-    @staticmethod
-    def load(file_name):
-        f = open(file_name, "r")
-        return yaml.load(f)
+    def __load(self, file_name):
+        with  open(file_name, "r") as f:
+            cfg = yaml.load(f)
 
-    @staticmethod
-    def save(config, file_name):
-        f = open(file_name, "w")
-        yaml.dump(config, f, default_flow_style=False)
+            images_cfg = cfg['images']
+            for image_cfg in images_cfg:
+                image = Image(image_cfg)
+                self.images.append(image)
+
+            self.naming = Naming(cfg)
+            self.network = Network(cfg)

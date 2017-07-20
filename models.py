@@ -1,7 +1,7 @@
+import os
 from peewee import *
 
 db = SqliteDatabase("containers.db")
-
 
 class BaseModel(Model):
     class Meta:
@@ -20,6 +20,7 @@ class Port(BaseModel):
     container = ForeignKeyField(Container, related_name="ports")
     value = IntegerField()
 
+os.remove('containers.db')
 db.connect()
-Container.create_table(True)
-Port.create_table(True)
+Container.create_table()
+Port.create_table()

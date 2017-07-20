@@ -1,11 +1,19 @@
-import uvloop
 import netfilterqueue
 import asyncio
 import socket
-import aiomonitor
 from container import ContainerManager
 from dpkt import ip, tcp, icmp
 from utility import IPAddress
+from configuration import Configuration
+from log import write
+from handlers.icmp import ICMPHandler
+
+class Proxy:
+
+    def __init__(self, queue_num, container_mgr, proxy_ip, proxy_port):
+        self.proxy_ip = IPAddress.str_to_int(proxy_ip)
+        self.proxy_ip_b = IPAddress.str_to_bytes(proxy_ip)
+        self.proxy_port = proxy_port
 
 class NFQueueManager:
 
@@ -18,10 +26,7 @@ class NFQueueManager:
         self.source_addrs = {}
         self.container_mgr = container_mgr
         self.nfq_socket = None
-
-        self.icmp_client = socket.socket(socket.AF_INET, socket.SOCK_RAW, ip.IP_PROTO_RAW)
-        self.icmp_client.setblocking(False)
-        self.icmp_client.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, True)
+        self.icmp_handler = ICMPHandler()
 
     async def proxy(self, reader, writer, start_data, name):
         try:
@@ -50,7 +55,6 @@ class NFQueueManager:
             ip = IPAddress.str_to_int(client_addr[0])
             key = self.get_key(client_addr[1], str(ip))
             container_addr = self.source_addrs[key]
-            print(container_addr)
             start_data = await client_reader.read(2048)
         except ConnectionResetError:
             client_writer.close()
@@ -120,17 +124,6 @@ class NFQueueManager:
         data = self.nfq_socket.recv(2048)
         self.nfqueue.get_packet(data)
 
-
-    def handle_icmp(self, ip_hdr):
-
-        icmp_reply = ip.IP(bytes(ip_hdr))
-        icmp_reply.src = IPAddress.str_to_bytes('192.168.1.9')
-        icmp_reply.dst = ip_hdr.src
-        icmp_reply.data.type = icmp.ICMP_ECHOREPLY
-        icmp_reply.sum = 0
-
-        self.icmp_client.sendto(bytes(icmp_reply), (IPAddress.bytes_to_str(ip_hdr.src), 0))
-
     def get_key(self, port, ip):
         return ''.join([str(port), str(ip)])
 
@@ -140,7 +133,10 @@ class NFQueueManager:
         modified = False
 
         if ip_hdr.p == ip.IP_PROTO_ICMP:
-            self.handle_icmp(ip_hdr)
+            dst_ip = IPAddress.bytes_to_int(ip_hdr.dst)
+            container_name = self.container_mgr.get_container_name(dst_ip)
+            if container_name is not None:
+                self.icmp_handler.handle(container_name, ip_hdr, ip_hdr.data)
 
         if ip_hdr.p == ip.IP_PROTO_TCP:
             src_ip = IPAddress.bytes_to_int(ip_hdr.src)
@@ -187,7 +183,8 @@ class NFQueueManager:
             pkt.accept()
 
 if __name__ == '__main__':
-    cm = ContainerManager()
+    config = Configuration('unit_test_cfg.yaml')
+    cm = ContainerManager(config)
     cm.start()
     n = NFQueueManager(0, cm, '192.168.1.9', 5996)
     n.start()

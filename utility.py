@@ -32,4 +32,3 @@ class IPAddress:
             if temp_network.size >= count:
                 return cidr
 
-print( IPAddress.generate_cidr('10.0.0.0', 10000))
