@@ -1,32 +1,49 @@
-import netfilterqueue
 import asyncio
+import netfilterqueue
 import socket
-from container import ContainerManager
-from dpkt import ip, tcp, icmp
-from utility import IPAddress
+from dpkt import ip
 from configuration import Configuration
+from container import ContainerManager
+from utility import IPAddress
+from dpkt import icmp
 from log import write
-from handlers.icmp import ICMPHandler
 
-class Proxy:
+class ICMPHandler():
 
-    def __init__(self, queue_num, container_mgr, proxy_ip, proxy_port):
-        self.proxy_ip = IPAddress.str_to_int(proxy_ip)
-        self.proxy_ip_b = IPAddress.str_to_bytes(proxy_ip)
-        self.proxy_port = proxy_port
+    def __init__(self, config):
+        self.icmp_client = socket.socket(socket.AF_INET, socket.SOCK_RAW, ip.IP_PROTO_RAW)
+        self.icmp_client.setblocking(False)
+        self.icmp_client.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, True)
+
+    def handle(self, container_name, ip_hdr, icmp_hdr):
+
+        if icmp_hdr.type == icmp.ICMP_ECHO:
+            write('Echo request for {0}'.format(container_name), 'green')
+            icmp_reply = ip.IP(bytes(ip_hdr))
+            icmp_reply.src = ip_hdr.dst
+            icmp_reply.dst = ip_hdr.src
+            icmp_reply.data.type = icmp.ICMP_ECHOREPLY
+            icmp_reply.sum = 0
+            self.icmp_client.sendto(bytes(icmp_reply), (IPAddress.bytes_to_str(ip_hdr.src), 0))
+
+class EndPoint:
+
+    def __init__(self, ip_str, port):
+        self.ip_str = ip_str
+        self.ip_int = IPAddress.str_to_int(ip_str)
+        self.ip_byte = IPAddress.str_to_bytes(ip_str)
+        self.port = port
 
 class NFQueueManager:
 
-    def __init__(self, queue_num, container_mgr, proxy_ip, proxy_port):
-        self.proxy_ip = IPAddress.str_to_int(proxy_ip)
-        self.proxy_ip_b = IPAddress.str_to_bytes(proxy_ip)
-        self.proxy_port = proxy_port
+    def __init__(self, queue_num, container_mgr, config):
+        self.proxy_endpoint = EndPoint(config.router.get_interface_ip(), config.router.proxy_port)
         self.nfqueue = netfilterqueue.NetfilterQueue()
         self.queue_num = queue_num
         self.source_addrs = {}
         self.container_mgr = container_mgr
         self.nfq_socket = None
-        self.icmp_handler = ICMPHandler()
+        self.icmp_handler = ICMPHandler(config)
 
     async def proxy(self, reader, writer, start_data, name):
         try:
@@ -102,17 +119,14 @@ class NFQueueManager:
 
         task = asyncio.ensure_future(self.container_mgr.monitor_idle_containers())
 
-        listen_ip = IPAddress.int_to_str(self.proxy_ip)
-
-        #asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
         loop = asyncio.get_event_loop()
         # Register the file descriptor for read event
         loop.add_reader(self.nfq_socket.fileno(), self.reader)
 
         server = loop.run_until_complete(
             asyncio.start_server(self.client_connected,
-                                 host=listen_ip,
-                                 port=self.proxy_port)
+                                 host=self.proxy_endpoint.ip_str,
+                                 port=self.proxy_endpoint.port)
         )
 
         loop.run_forever()
@@ -143,7 +157,7 @@ class NFQueueManager:
             dst_ip = IPAddress.bytes_to_int(ip_hdr.dst)
 
             # Output data coming from the proxy
-            if src_ip == self.proxy_ip and tcp_hdr.sport == self.proxy_port:
+            if src_ip == self.proxy_endpoint.ip_byte and tcp_hdr.sport == self.proxy_endpoint.port:
                 key = self.get_key(tcp_hdr.dport, dst_ip)
                 # Grab the addr of the docker container to modify
                 # the outgoing packets to the original source
@@ -164,8 +178,8 @@ class NFQueueManager:
                     key = self.get_key(tcp_hdr.sport, src_ip)
                     self.source_addrs[key] = (ip_hdr.dst, tcp_hdr.dport)
                     # Modify the ip header so that the packet goes to the proxy server
-                    ip_hdr.dst = self.proxy_ip_b
-                    tcp_hdr.dport = self.proxy_port
+                    ip_hdr.dst = self.proxy_endpoint.ip_byte
+                    tcp_hdr.dport = self.proxy_endpoint.port
                     modified = True
                 else:
                     # This packet is not associated with a container so drop it
@@ -186,7 +200,7 @@ if __name__ == '__main__':
     config = Configuration('unit_test_cfg.yaml')
     cm = ContainerManager(config)
     cm.start()
-    n = NFQueueManager(0, cm, '192.168.1.9', 5996)
+    n = NFQueueManager(0, cm, config)
     n.start()
 
 

@@ -1,4 +1,17 @@
 import yaml
+import socket
+import fcntl
+import struct
+
+class Router():
+
+    def __init__(self, cfg_dict):
+        cfg = cfg_dict['router']
+        self.interface = cfg['interface']
+        self.proxy_port = cfg['proxy_port']
+
+    def get_interface_ip(self):
+        return '10.0.2.15'
 
 class Network():
 
@@ -30,6 +43,7 @@ class Configuration():
         self.images = []
         self.naming = None
         self.network = None
+        self.router = None
         self.__load(file_name)
 
     def __load(self, file_name):
@@ -43,3 +57,4 @@ class Configuration():
 
             self.naming = Naming(cfg)
             self.network = Network(cfg)
+            self.router = Router(cfg)

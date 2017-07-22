@@ -17,3 +17,7 @@ naming:
 network:
   address: 10.0.0.0
   name: crouter
+
+router:
+  interface: enp0s3
+  proxy_port: 5996
