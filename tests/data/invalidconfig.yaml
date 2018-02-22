@@ -1,0 +1,20 @@
+images:
+- name:
+  desc: NGINX
+  count: ABC
+
+naming:
+  allowable_host_chars:
+  max_host_len: ABC
+  min_host_len: ABC
+  word_file: does not exist
+
+container_network:
+  address: ABC
+  name:
+  domain:
+
+network_handler:
+  queue_num: A
+  interface: A
+  proxy_port: A

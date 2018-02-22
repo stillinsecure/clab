@@ -1,0 +1,23 @@
+images:
+- name: nginx:latest
+  desc: NGINX
+  count: 1
+- name: storytel/dnsmasq
+  desc: DNS
+  count: 1
+
+naming:
+  allowable_host_chars: '[^a-z0-9]'
+  max_host_len: 20
+  min_host_len: 2
+  word_file: en.txt
+
+container_network:
+  address: 10.0.0.0
+  name: clab
+  domain: mytest.local
+
+network_handler:
+  queue_num: 0
+  interface: ens33
+  proxy_port: 5996

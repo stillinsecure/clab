@@ -1,11 +1,15 @@
-import os
 from peewee import *
+from os import path, remove
 
-db = SqliteDatabase("containers.db")
+FILE_NAME = 'containers.db'
+
+db = SqliteDatabase(FILE_NAME)
+
 
 class BaseModel(Model):
     class Meta:
         database = db
+
 
 class Container(BaseModel):
     id = PrimaryKeyField(null=False)
@@ -18,9 +22,18 @@ class Container(BaseModel):
 class Port(BaseModel):
     id = PrimaryKeyField(null=False)
     container = ForeignKeyField(Container, related_name="ports")
-    value = IntegerField()
+    number = IntegerField()
+    protocol = IntegerField()
 
-os.remove('containers.db')
-db.connect()
-Container.create_table()
-Port.create_table()
+
+def setup_database():
+    db.connect()
+
+    if not Container.table_exists():
+        Container.create_table(True)
+    if not Port.table_exists():
+        Port.create_table(True)
+
+
+def close_database():
+    db.close()

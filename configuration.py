@@ -1,60 +1,209 @@
+import hashlib
 import yaml
-import socket
-import fcntl
-import struct
+import netifaces
+import re
+from os import path
+import logging
 
-class Router():
+HASH_FILE = 'config.sha256'
+
+
+class BaseConfig:
+
+    def __init__(self, cfg_dict, section):
+        """
+        Retrieves the config section from the cfg_dict. The section is
+        a config dictionary itself
+        """
+        if section is None:
+            self.cfg_dict = cfg_dict
+        else:
+            self.cfg_dict = self.get_config_dictionary(cfg_dict, section)
+
+        if type(cfg_dict) is not dict:
+            raise ConfigurationException('Config section {} is not a dictionary'.format(section))
+
+    def get_config_dictionary(self, cfg_dict, name):
+        """
+        Returns a configuration dictionary within
+        the dictionary passed in to the constructor
+        """
+        if name is None:
+            raise ConfigurationException('Config dictionary section name is None')
+
+        if name not in cfg_dict:
+            raise ConfigurationException('Could not find the config dictionary {}'.format(name))
+
+        return cfg_dict[name]
+
+    def get_config_setting(self, setting, default=None, regex=None):
+        """
+        Returns the specified setting within the config dict
+        """
+        if setting is None:
+            raise ConfigurationException('Setting name was empty')
+
+        if default is None and setting not in self.cfg_dict:
+            raise ConfigurationException('Could not find the setting {}'.format(setting))
+
+        if setting not in self.cfg_dict:
+            return default
+
+        value = self.cfg_dict[setting]
+
+        if regex is not None and not re.match(regex, value):
+            raise ConfigurationException('{} is an invalud value for {}'.format(value, setting))
+
+        return value
+
+class NetworkHandlerConfig(BaseConfig):
 
     def __init__(self, cfg_dict):
-        cfg = cfg_dict['router']
-        self.interface = cfg['interface']
-        self.proxy_port = cfg['proxy_port']
+        """
+        interface - Name of the interface that the proxy server will bind to as well
+        as the interface that will serve as the router to the container network.
+
+        proxy_port - The port that the tcp proxy server will bind to
+        """
+        super().__init__(cfg_dict, 'network_handler')
+        self.queue_num = self.get_config_setting('queue_num')
+        self.interface = self.get_config_setting('interface')
+        self.proxy_port = self.get_config_setting('proxy_port')
 
     def get_interface_ip(self):
-        return '10.0.2.15'
+        """
+        Returns the IP address assigned to the interface specified in the
+        configuration
+        """
+        if self.interface is None:
+            raise ConfigurationException('An interface needs to be defined in the router config')
 
-class Network():
+        try:
+            interface = netifaces.ifaddresses(self.interface)
+        except ValueError:
+            raise ConfigurationException('The interface {} is not valid'.format(self.interface))
+
+        if netifaces.AF_INET in interface and len(interface[netifaces.AF_INET]) > 0:
+            return interface[netifaces.AF_INET][0]['addr']
+
+        raise ConfigurationException('Could not find a valid ip address for the interface {}'.format(self.interface))
+
+
+class NetworkConfig(BaseConfig):
 
     def __init__(self, cfg_dict):
-        cfg = cfg_dict['network']
-        self.address = cfg['address']
-        self.name = cfg['name']
+        super().__init__(cfg_dict, 'container_network')
+        self.address = self.get_config_setting('address')
+        self.name = self.get_config_setting('name')
+        self.domain = self.get_config_setting('domain')
 
-class Image():
 
-    def __init__(self, cfg_dict):
-        self.desc = cfg_dict['desc']
-        self.name = cfg_dict['name']
-        self.count = cfg_dict['count']
-
-class Naming():
+class ImagesConfig(BaseConfig):
 
     def __init__(self, cfg_dict):
-        cfg = cfg_dict['naming']
-        self.word_file = cfg['word_file']
-        self.min_host_len = cfg['min_host_len']
-        self.max_host_len = cfg['max_host_len']
-        self.allowable_host_chars = cfg['allowable_host_chars']
+        """
+        Iterator for the images config section
+        """
+        super().__init__(cfg_dict, 'images')
+        self.index = 0
+        self.images = []
+        for image_cfg in self.cfg_dict:
+            self.images.append(ImageConfig(image_cfg))
+
+    def __iter__(self):
+        self.index = 0
+        return self
+
+    def __next__(self):
+        if self.index >= len(self.images):
+            raise StopIteration
+        else:
+            image = self.images[self.index]
+            self.index += 1
+            return image
+
+
+class ImageConfig(BaseConfig):
+
+    def __init__(self, cfg_dict):
+        """
+        desc - Description of the image
+        name - Name of the image
+        count - Number of containers to create
+        """
+        super().__init__(cfg_dict, None)
+        self.desc = self.get_config_setting('desc')
+        self.name = self.get_config_setting('name')
+        self.count = self.get_config_setting('count')
+
+
+class NamingConfig(BaseConfig):
+
+    def __init__(self, cfg_dict):
+        """
+        Settings used to control the generation of host names
+        for the containers.
+
+        word_file - The word file to generate host names from
+        min_host_len - The minimum host name length
+        max_host_len - The maximum host name length
+        allowable_host_chars - Regex of allowables characters for the host names
+        """
+        super().__init__(cfg_dict, 'naming')
+        self.word_file = self.get_config_setting('word_file')
+        self.min_host_len = self.get_config_setting('min_host_len')
+        self.max_host_len = self.get_config_setting('max_host_len')
+        self.allowable_host_chars = self.get_config_setting('allowable_host_chars')
+
+
+class ConfigurationException(Exception):
+    pass
 
 
 class Configuration():
 
-    def __init__(self, file_name):
-        self.images = []
+    def __init__(self):
+        self.images = None
         self.naming = None
         self.network = None
         self.router = None
-        self.__load(file_name)
 
-    def __load(self, file_name):
-        with  open(file_name, "r") as f:
+    def open(self, file_name, ignore_changes=True):
+        if not path.isfile(file_name):
+            raise ConfigurationException('Could not find the configuration file {}'.format(file_name))
+
+        existing_hash = self.__read_hash()
+        hash = self.__generate_hash(file_name)
+
+        if existing_hash != hash and not ignore_changes:
+            raise ConfigurationException('Config has changed')
+
+        self.__write_hash(hash)
+
+        with open(file_name, "r") as f:
             cfg = yaml.load(f)
+            if cfg == 'This is not a valid yaml config file':
+                raise ConfigurationException(cfg)
 
-            images_cfg = cfg['images']
-            for image_cfg in images_cfg:
-                image = Image(image_cfg)
-                self.images.append(image)
+            self.images = ImagesConfig(cfg)
+            self.naming = NamingConfig(cfg)
+            self.network = NetworkConfig(cfg)
+            self.router = NetworkHandlerConfig(cfg)
 
-            self.naming = Naming(cfg)
-            self.network = Network(cfg)
-            self.router = Router(cfg)
+    def __read_hash(self):
+        if path.isfile(HASH_FILE):
+            with open(HASH_FILE, 'r') as f:
+                return f.read()
+        return None
+
+    def __write_hash(self, hash):
+        with open(HASH_FILE, 'w') as f:
+            f.write(hash)
+
+    def __generate_hash(self, file_name):
+        config_hash = hashlib.sha256()
+        with open(file_name, 'rb') as f:
+            for data in iter(lambda : f.read(4096), b''):
+                config_hash.update(data)
+        return config_hash.hexdigest()
+

@@ -1,0 +1,16 @@
+#!/bin/sh
+
+filter='iptables'
+mangle='iptables -t mangle'
+nat='iptables -t nat'
+
+$mangle -F
+$mangle -X
+
+$filter -F
+$filter -X
+
+$nat -F
+$nat -X
+
+service docker restart

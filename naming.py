@@ -1,7 +1,6 @@
 import re
 import random
 
-
 class Naming:
 
     def __init__(self):

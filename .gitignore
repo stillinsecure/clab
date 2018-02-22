@@ -1,6 +1,9 @@
 # PyCharm folder
 .idea
-container.db
+containers.db
+notes.txt
+*.swp
+config.sha256
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

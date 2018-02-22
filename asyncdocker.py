@@ -17,10 +17,11 @@ API_CMD_LIST_CONTAINERS = 'json?all=1'
 
 UNIX_SOCKET = '/var/run/docker.sock'
 
+
 class AsyncDocker:
 
     def __init__(self):
-        self.dockerd = self.dockerd = ClientSession(connector=UnixConnector(UNIX_SOCKET))
+        self.dockerd = ClientSession(connector=UnixConnector(UNIX_SOCKET))
 
     def close(self):
         self.dockerd.close()
@@ -38,7 +39,6 @@ class AsyncDocker:
         async with self.dockerd.post(url) as response:
             if response.status == STATUS_NO_ERROR or response.status == STATUS_CONTAINER_ALREADY_STARTED:
                 return True
-            print(response)
             return False
 
     async def stop_container(self, name):
@@ -47,4 +47,3 @@ class AsyncDocker:
         async with self.dockerd.post(url) as response:
             if response.status == STATUS_NO_ERROR or response.status == STATUS_CONTAINER_ALREADY_STOPPED:
                 return True
-
