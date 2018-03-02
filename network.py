@@ -1,3 +1,4 @@
+import iptc
 import logging
 import netfilterqueue
 import asyncio
@@ -5,9 +6,133 @@ import socket
 from dpkt import ip, icmp
 from utility import Net
 from collections import namedtuple
-from container import ContainerManager
+
 
 HandlerResult = namedtuple('HandlerResult', 'modified, accept')
+
+CIENT_TO_CONTAINER_DIR = 1
+CONTAINER_TO_CLIENT_DIR = 2
+
+IPTABLES_NFQUEUE = 'NFQUEUE'
+IPTABLES_QUEUE_NUM = 'queue-num'
+IPTABLES_MULTIPORT = 'multiport'
+IPTABLES_PREROUTING = 'PREROUTING'
+IPTABLES_OUTPUT = 'OUTPUT'
+
+TCP_PROTOCOL_TXT = 'tcp'
+UDP_PROTOCOL_TXT = 'udp'
+ICMP_PROTOCOL_TXT = 'icmp'
+
+TCP_PROTOCOL = 6
+UDP_PROTOCOL = 17
+
+
+class IPTableRules:
+
+    def __init__(self, config):
+        self.config = config
+
+    def delete_clab_chain(self):
+        prerouting_chain = iptc.Chain(iptc.Table(iptc.Table.MANGLE), IPTABLES_PREROUTING)
+
+        for index in range(len(prerouting_chain.rules), 0, -1):
+            rule = prerouting_chain.rules[index-1]
+            if rule.target.name == self.config.router.chain_name:
+                prerouting_chain.delete_rule(rule)
+
+        output_chain = iptc.Chain(iptc.Table(iptc.Table.FILTER), IPTABLES_OUTPUT)
+
+        for index in range(len(output_chain.rules), 0, -1):
+            rule = output_chain.rules[index-1]
+            if rule.target.name == self.config.router.chain_name:
+                output_chain.delete_rule(rule)
+
+        self.delete_chain(iptc.Table.MANGLE, self.config.router.chain_name)
+        self.delete_chain(iptc.Table.FILTER, self.config.router.chain_name)
+
+    def delete_chain(self, table_name, chain_name):
+        table = iptc.Table(table_name)
+        for table_index in range(len(table.chains), 0, -1):
+            chain = table.chains[table_index-1]
+            if chain.name == chain_name:
+                for chain_index in range(len(chain.rules), 0, -1):
+                    rule = chain.rules[chain_index-1]
+                    chain.delete_rule(rule)
+                table.delete_chain(chain)
+                return
+
+    def create(self, clab_network, ports):
+        print('Setting up iptables', 'white')
+
+        assert clab_network is not None and len(clab_network) > 1, 'A network address is required'
+        assert ports is not None and len(ports) >= 1, 'Images need to be configured with TCP ports'
+
+        proxy_port = self.config.router.proxy_port
+
+        self.delete_clab_chain()
+
+        # Create a new CLAB chain in the MANGLE and FILTER tables
+        # to make it easier to manage the rules, ie drop the rules
+        # on every run
+        mangle_table = iptc.Table(iptc.Table.MANGLE)
+        mangle_clab_chain = mangle_table.create_chain(self.config.router.chain_name)
+
+        filter_table = iptc.Table(iptc.Table.FILTER)
+        output_clab_chain = filter_table.create_chain(self.config.router.chain_name)
+
+        tcp_ports = [str(port.num) for port in ports if port.protocol == TCP_PROTOCOL]
+        udp_ports = [str(port.num) for port in ports if port.protocol == UDP_PROTOCOL]
+
+        # Rule to send all tcp traffic for containers with matching ports to the NFQUEUE
+        if tcp_ports is not None and len(tcp_ports) > 0:
+            tcp_rule = iptc.Rule()
+            tcp_rule.dst = clab_network
+            tcp_rule.protocol = TCP_PROTOCOL_TXT
+            tcp_match = tcp_rule.create_match(IPTABLES_MULTIPORT)
+            tcp_match.dports = ','.join(tcp_ports)
+            tcp_target = tcp_rule.create_target(IPTABLES_NFQUEUE)
+            tcp_target.set_parameter(IPTABLES_QUEUE_NUM, self.config.router.queue_num)
+            mangle_clab_chain.insert_rule(tcp_rule)
+
+        # Rule to send all udp traffic for containers with matching ports to the NFQUEUE
+        if udp_ports is not None and len(udp_ports) > 0:
+            udp_rule = iptc.Rule()
+            udp_rule.dst = clab_network
+            udp_rule.protocol = UDP_PROTOCOL_TXT
+            udp_match = udp_rule.create_match(IPTABLES_MULTIPORT)
+            udp_match.dports = ','.join(udp_ports)
+            udp_target = udp_rule.create_target(IPTABLES_NFQUEUE)
+            udp_target.set_parameter(IPTABLES_QUEUE_NUM, self.config.router.queue_num)
+            mangle_clab_chain.insert_rule(udp_rule)
+
+        # Rule to send all icmp traffic for containers to the NFQUEUE
+        icmp_rule = iptc.Rule()
+        icmp_rule.dst = clab_network
+        icmp_rule.protocol = ICMP_PROTOCOL_TXT
+        icmp_target = icmp_rule.create_target(IPTABLES_NFQUEUE)
+        icmp_target.set_parameter(IPTABLES_QUEUE_NUM, self.config.router.queue_num)
+        mangle_clab_chain.insert_rule(icmp_rule)
+
+        # Rule to send all output packets from the proxy back to the NFQUEUE
+        # Proxy rule for tcp
+        proxy_rule = iptc.Rule()
+        proxy_rule.protocol = TCP_PROTOCOL_TXT
+        proxy_match = proxy_rule.create_match(TCP_PROTOCOL_TXT)
+        proxy_match.sport = str(proxy_port)
+        proxy_target = proxy_rule.create_target(IPTABLES_NFQUEUE)
+        proxy_target.set_parameter(IPTABLES_QUEUE_NUM, self.config.router.queue_num)
+        output_clab_chain.insert_rule(proxy_rule)
+
+        # Create RULES to send traffic to the CLAB chain
+        prerouting_chain = iptc.Chain(iptc.Table(iptc.Table.MANGLE), IPTABLES_PREROUTING)
+        prerouting_rule = iptc.Rule()
+        prerouting_rule.create_target(self.config.router.chain_name)
+        prerouting_chain.insert_rule(prerouting_rule)
+
+        output_chain = iptc.Chain(iptc.Table(iptc.Table.FILTER), IPTABLES_OUTPUT)
+        output_rule = iptc.Rule()
+        output_rule.create_target(self.config.router.chain_name)
+        output_chain.insert_rule(output_rule)
 
 
 class UDPHandler:
@@ -47,7 +172,6 @@ class TCPHandler:
         return ''.join([str(port), str(ip)])
 
     async def proxy(self, reader, writer, start_data, name):
-
         try:
             while True:
                 if start_data is not None:
@@ -57,10 +181,12 @@ class TCPHandler:
                     data = await reader.read(2048)
                     self.container_mgr.update_container(name)
                     if not data:
+                        print('No data')
                         break
                 writer.write(data)
                 await writer.drain()
         except ConnectionResetError:
+            print('connection reset')
             pass
         finally:
             writer.close()
@@ -81,6 +207,11 @@ class TCPHandler:
             client_writer.close()
             return
 
+        # Discovery scans will not send any data
+        if start_data is None or len(start_data) == 0:
+            client_writer.close()
+            return
+
         host = Net.ipbytes_to_int(container_addr[0])
         port = container_addr[1]
 
@@ -96,7 +227,7 @@ class TCPHandler:
 
         # It might take a couple of tries to hit the container until it
         # fully spins up
-        for retry in range(1,5):
+        for retry in range(1, 5):
             try:
                 logging.debug('Attempt %s to connect to %s %s:%s', retry, name, host, port)
                 remote_reader, remote_writer = await asyncio.wait_for(

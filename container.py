@@ -1,3 +1,4 @@
+
 import re
 import netaddr
 from utility import Dictionary
@@ -5,17 +6,12 @@ import utility
 import asyncio
 import asyncdocker
 import docker
-import iptc
 import logging
 from naming import Naming
 from models import Container, Port
 from collections import namedtuple
 from datetime import datetime
-
-TCP_PROTOCOL_TXT = 'tcp'
-UDP_PROTOCOL_TXT = 'udp'
-TCP_PROTOCOL = 6
-UDP_PROTOCOL = 17
+from network import IPTableRules, TCP_PROTOCOL_TXT, TCP_PROTOCOL, UDP_PROTOCOL_TXT, UDP_PROTOCOL
 
 ContainerUpdate = namedtuple('ContainerUpdate', 'name ip port')
 ExposedPort = namedtuple('ExposedPort', 'num text protocol')
@@ -84,7 +80,7 @@ class ContainerManager:
                     if container.status is not CTR_STATUS_RUNNING:
                         continue
                     last_seen = (datetime.now() - container.last_seen).total_seconds()
-                    if last_seen > 20:
+                    if last_seen > 10:
                         container.status = CTR_STATUS_STOPPING
                         logging.info('Stopping the container %s', container.name)
                         await self.client.stop_container(container.name)
@@ -97,7 +93,7 @@ class ContainerManager:
 
     async def start_if_not_running(self, ip, port, protocol):
         container = self.get_container_by_endpoint(ip, port, protocol)
-        if container not in self.containers:
+        if container.name not in self.containers:
             running_container = RunningContainer(container.name)
             # Need to set the status outside of the await call. Another task
             # may come in here during the await
@@ -212,88 +208,12 @@ class ContainerManager:
         with open(conf_file, 'w') as f:
             containers = Container.select()
             for container in containers:
-                entry = 'address=/{}.{}/{}\r\n'.format(container.name, self.config.network.domain, container.ip)
-                f.write(entry)
-
-    def setup_iptables(self, crouter_network, ports):
-        print('Setting up iptables', 'white')
-
-        assert crouter_network is not None and len(crouter_network) > 1, 'A network address is required'
-        assert ports is not None and len(ports) >= 1, 'Images need to be configured with TCP ports'
-
-        # Flush existing MANGLE PREROUTING chain
-        prerouting_chain = iptc.Chain(iptc.Table(iptc.Table.MANGLE), 'PREROUTING')
-
-        dst = utility.Net.cidr_to_iptables_dst(crouter_network)
-        src = '{}/255.255.255.255'.format(self.config.router.get_interface_ip())
-
-        for rule in prerouting_chain.rules:
-            if rule.dst == dst:
-                prerouting_chain.delete_rule(rule)
-
-        tcp_ports = [str(port.num) for port in ports if port.protocol == TCP_PROTOCOL]
-        udp_ports = [str(port.num) for port in ports if port.protocol == UDP_PROTOCOL]
-
-        # Rule to send all tcp traffic for containers with matching ports to the NFQUEUE
-        if tcp_ports is not None:
-            tcp_rule = iptc.Rule()
-            tcp_rule.dst = crouter_network
-            tcp_rule.protocol = TCP_PROTOCOL_TXT
-            tcp_match = tcp_rule.create_match('multiport')
-            tcp_match.dports = ','.join(tcp_ports)
-            tcp_target = tcp_rule.create_target('NFQUEUE')
-            tcp_target.set_parameter('queue-num', '0')
-            prerouting_chain.insert_rule(tcp_rule)
-
-        # Rule to send all udp traffic for containers with matching ports to the NFQUEUE
-        if udp_ports is not None:
-            udp_rule = iptc.Rule()
-            udp_rule.dst = crouter_network
-            udp_rule.protocol = UDP_PROTOCOL_TXT
-            udp_match = udp_rule.create_match('multiport')
-            udp_match.dports = ','.join(udp_ports)
-            udp_target = udp_rule.create_target('NFQUEUE')
-            udp_target.set_parameter('queue-num', '0')
-            prerouting_chain.insert_rule(udp_rule)
-
-        # Rule to send all icmp traffic for containers to the NFQUEUE
-        icmp_rule = iptc.Rule()
-        icmp_rule.dst = crouter_network
-        icmp_rule.protocol = 'icmp'
-        icmp_target = icmp_rule.create_target('NFQUEUE')
-        icmp_target.set_parameter('queue-num', '0')
-        prerouting_chain.insert_rule(icmp_rule)
-
-        # Rule to send all output packets from the proxy back to the NFQUEUE
-        output_chain = iptc.Chain(iptc.Table(iptc.Table.FILTER), 'OUTPUT')
-
-        port = self.config.router.proxy_port
-
-        for rule in output_chain.rules:
-            if rule.src == src and len(rule.matches) == 1 \
-                    and rule.matches[0].parameters['sport'] == str(port) \
-                    and rule.target.name == 'NFQUEUE':
-                output_chain.delete_rule(rule)
-
-        # Proxy rule for tcp
-        proxy_rule = iptc.Rule()
-        proxy_rule.src = crouter_network
-        proxy_rule.protocol = TCP_PROTOCOL_TXT
-        proxy_match = proxy_rule.create_match(TCP_PROTOCOL_TXT)
-        proxy_match.sport = str(self.config.router.proxy_port)
-        proxy_target = proxy_rule.create_target('NFQUEUE')
-        proxy_target.set_parameter('queue-num', '0')
-        output_chain.insert_rule(proxy_rule)
-
-        # Proxy rule for udp
-        proxy_rule = iptc.Rule()
-        proxy_rule.src = crouter_network
-        proxy_rule.protocol = UDP_PROTOCOL_TXT
-        proxy_match = proxy_rule.create_match(UDP_PROTOCOL_TXT)
-        proxy_match.sport = str(self.config.router.proxy_port)
-        proxy_target = proxy_rule.create_target('NFQUEUE')
-        proxy_target.set_parameter('queue-num', '0')
-        output_chain.insert_rule(proxy_rule)
+                rev_ip = '.'.join(reversed(container.ip.split('.')))
+                fqdn = '{}.{}'.format(container.name, self.config.network.domain)
+                record = 'address=/{}/{}\r\n'.format(fqdn, container.ip)
+                ptr = ''.join(['ptr-record=', rev_ip, '.in-addr.arpa,', fqdn, '\r\n'])
+                f.write(record)
+                f.write(ptr)
 
     def create_network(self, count):
         print('Creating network for {} hosts'.format(count), 'white')
@@ -327,7 +247,7 @@ class ContainerManager:
         if broadcast in addresses:
             addresses.remove(broadcast)
         if network_cfg.address in addresses:
-            addresses.remove(network_cfg.address)\
+            addresses.remove(network_cfg.address)
 
         ipam_pool = docker.types.IPAMPool(subnet=subnet, gateway=gateway)
         ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
@@ -368,7 +288,8 @@ class ContainerManager:
         network, addresses, subnet = self.create_network(count)
 
         # Apply the iptable rules required for the configured images
-        self.setup_iptables(subnet, unique_ports)
+        rules = IPTableRules(self.config)
+        rules.create(subnet, unique_ports)
 
         print('Creating containers', 'white')
 

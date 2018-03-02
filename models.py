@@ -26,6 +26,18 @@ class Port(BaseModel):
     protocol = IntegerField()
 
 
+class FirewallRule(BaseModel):
+    id = PrimaryKeyField(null=False)
+    src = CharField(null=True)
+    dst = CharField(null=True)
+    protocol = CharField()
+    dport = CharField(null=True)
+    sport = CharField(null=True)
+    table = CharField()
+    chain = CharField()
+    queue_num = IntegerField()
+
+
 def setup_database():
     db.connect()
 
@@ -33,6 +45,8 @@ def setup_database():
         Container.create_table(True)
     if not Port.table_exists():
         Port.create_table(True)
+    if not FirewallRule.table_exists():
+        FirewallRule.create_table()
 
 
 def close_database():

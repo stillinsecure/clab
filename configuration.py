@@ -56,6 +56,7 @@ class BaseConfig:
 
         return value
 
+
 class NetworkHandlerConfig(BaseConfig):
 
     def __init__(self, cfg_dict):
@@ -66,9 +67,10 @@ class NetworkHandlerConfig(BaseConfig):
         proxy_port - The port that the tcp proxy server will bind to
         """
         super().__init__(cfg_dict, 'network_handler')
-        self.queue_num = self.get_config_setting('queue_num')
+        self.queue_num = int(self.get_config_setting('queue_num'))
         self.interface = self.get_config_setting('interface')
         self.proxy_port = self.get_config_setting('proxy_port')
+        self.chain_name = self.get_config_setting('chain_name')
 
     def get_interface_ip(self):
         """

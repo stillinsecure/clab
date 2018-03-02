@@ -39,7 +39,7 @@ if __name__ == '__main__':
         print(CONTACT_INFO)
 
         # Configure logging
-        logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(level=logging.INFO)
 
         # Sets up the database for Peewee ORM
         setup_database()

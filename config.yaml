@@ -2,9 +2,6 @@ images:
 - name: nginx:latest
   desc: NGINX
   count: 1
-- name: storytel/dnsmasq
-  desc: DNS
-  count: 1
 
 naming:
   allowable_host_chars: '[^a-z0-9]'
@@ -21,3 +18,4 @@ network_handler:
   queue_num: 0
   interface: ens33
   proxy_port: 5996
+  chain_name: CLAB

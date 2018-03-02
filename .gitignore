@@ -4,6 +4,7 @@ containers.db
 notes.txt
 *.swp
 config.sha256
+\tests
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

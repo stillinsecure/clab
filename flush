@@ -2,7 +2,6 @@
 
 filter='iptables'
 mangle='iptables -t mangle'
-nat='iptables -t nat'
 
 $mangle -F
 $mangle -X
@@ -10,7 +9,8 @@ $mangle -X
 $filter -F
 $filter -X
 
-$nat -F
-$nat -X
+
+$mangle -X CLAB
+$filter -X CLAB
 
 service docker restart
