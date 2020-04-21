@@ -1,4 +1,6 @@
 # PyCharm folder
+.vscode
+~/
 .idea
 containers.db
 notes.txt

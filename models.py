@@ -1,5 +1,6 @@
-from peewee import *
 from os import path, remove
+
+from peewee import *
 
 FILE_NAME = 'containers.db'
 
@@ -17,7 +18,13 @@ class Container(BaseModel):
     name = CharField()
     ip = CharField()
     mac = CharField()
-
+    start_delay = IntegerField()
+    start_retry_count = IntegerField()
+    # Some containers perform initial actions on first start such as 
+    # create a db. If start_on_create is set to true the container
+    # is started so that the action can be performed against the 
+    # container layer
+    start_on_create = BooleanField()
 
 class Port(BaseModel):
     id = PrimaryKeyField(null=False)

@@ -1,8 +1,11 @@
 images:
-- name: nginx:latest
-  desc: NGINX
+- name: wangxian/alpine-mysql:latest
+  desc: mysql
   count: 1
-
+  start_delay: 1
+  start_delay_count: 5
+  start_on_create: True
+  
 naming:
   allowable_host_chars: '[^a-z0-9]'
   max_host_len: 20
@@ -15,7 +18,7 @@ container_network:
   domain: mytest.local
 
 network_handler:
-  queue_num: 0
+  queue_num: "0"
   interface: ens33
   proxy_port: 5996
   chain_name: CLAB

@@ -21,7 +21,8 @@ class BaseConfig:
             self.cfg_dict = self.get_config_dictionary(cfg_dict, section)
 
         if type(cfg_dict) is not dict:
-            raise ConfigurationException('Config section {} is not a dictionary'.format(section))
+            raise ConfigurationException(
+                'Config section {} is not a dictionary'.format(section))
 
     def get_config_dictionary(self, cfg_dict, name):
         """
@@ -29,10 +30,12 @@ class BaseConfig:
         the dictionary passed in to the constructor
         """
         if name is None:
-            raise ConfigurationException('Config dictionary section name is None')
+            raise ConfigurationException(
+                'Config dictionary section name is None')
 
         if name not in cfg_dict:
-            raise ConfigurationException('Could not find the config dictionary {}'.format(name))
+            raise ConfigurationException(
+                'Could not find the config dictionary {}'.format(name))
 
         return cfg_dict[name]
 
@@ -44,7 +47,8 @@ class BaseConfig:
             raise ConfigurationException('Setting name was empty')
 
         if default is None and setting not in self.cfg_dict:
-            raise ConfigurationException('Could not find the setting {}'.format(setting))
+            raise ConfigurationException(
+                'Could not find the setting {}'.format(setting))
 
         if setting not in self.cfg_dict:
             return default
@@ -52,7 +56,8 @@ class BaseConfig:
         value = self.cfg_dict[setting]
 
         if regex is not None and not re.match(regex, value):
-            raise ConfigurationException('{} is an invalud value for {}'.format(value, setting))
+            raise ConfigurationException(
+                '{} is an invalud value for {}'.format(value, setting))
 
         return value
 
@@ -67,7 +72,7 @@ class NetworkHandlerConfig(BaseConfig):
         proxy_port - The port that the tcp proxy server will bind to
         """
         super().__init__(cfg_dict, 'network_handler')
-        self.queue_num = int(self.get_config_setting('queue_num'))
+        self.queue_num = self.get_config_setting('queue_num')
         self.interface = self.get_config_setting('interface')
         self.proxy_port = self.get_config_setting('proxy_port')
         self.chain_name = self.get_config_setting('chain_name')
@@ -78,17 +83,20 @@ class NetworkHandlerConfig(BaseConfig):
         configuration
         """
         if self.interface is None:
-            raise ConfigurationException('An interface needs to be defined in the router config')
+            raise ConfigurationException(
+                'An interface needs to be defined in the router config')
 
         try:
             interface = netifaces.ifaddresses(self.interface)
         except ValueError:
-            raise ConfigurationException('The interface {} is not valid'.format(self.interface))
+            raise ConfigurationException(
+                'The interface {} is not valid'.format(self.interface))
 
         if netifaces.AF_INET in interface and len(interface[netifaces.AF_INET]) > 0:
             return interface[netifaces.AF_INET][0]['addr']
 
-        raise ConfigurationException('Could not find a valid ip address for the interface {}'.format(self.interface))
+        raise ConfigurationException(
+            'Could not find a valid ip address for the interface {}'.format(self.interface))
 
 
 class NetworkConfig(BaseConfig):
@@ -132,12 +140,17 @@ class ImageConfig(BaseConfig):
         desc - Description of the image
         name - Name of the image
         count - Number of containers to create
+        start_delay - The amount of time to wait in between connection attempts to
+                        the container.
+        start_retry_count - The number of times to retry the connection to the container
         """
         super().__init__(cfg_dict, None)
         self.desc = self.get_config_setting('desc')
         self.name = self.get_config_setting('name')
         self.count = self.get_config_setting('count')
-
+        self.start_delay = self.get_config_setting('start_delay', 1)
+        self.start_retry_count = self.get_config_setting('start_retry_count', 5)
+        self.start_on_create = self.get_config_setting('start_on_create', False)
 
 class NamingConfig(BaseConfig):
 
@@ -155,7 +168,8 @@ class NamingConfig(BaseConfig):
         self.word_file = self.get_config_setting('word_file')
         self.min_host_len = self.get_config_setting('min_host_len')
         self.max_host_len = self.get_config_setting('max_host_len')
-        self.allowable_host_chars = self.get_config_setting('allowable_host_chars')
+        self.allowable_host_chars = self.get_config_setting(
+            'allowable_host_chars')
 
 
 class ConfigurationException(Exception):
@@ -172,7 +186,8 @@ class Configuration():
 
     def open(self, file_name, ignore_changes=True):
         if not path.isfile(file_name):
-            raise ConfigurationException('Could not find the configuration file {}'.format(file_name))
+            raise ConfigurationException(
+                'Could not find the configuration file {}'.format(file_name))
 
         existing_hash = self.__read_hash()
         hash = self.__generate_hash(file_name)
@@ -183,7 +198,7 @@ class Configuration():
         self.__write_hash(hash)
 
         with open(file_name, "r") as f:
-            cfg = yaml.load(f)
+            cfg = yaml.safe_load(f)
             if cfg == 'This is not a valid yaml config file':
                 raise ConfigurationException(cfg)
 
@@ -205,7 +220,6 @@ class Configuration():
     def __generate_hash(self, file_name):
         config_hash = hashlib.sha256()
         with open(file_name, 'rb') as f:
-            for data in iter(lambda : f.read(4096), b''):
+            for data in iter(lambda: f.read(4096), b''):
                 config_hash.update(data)
         return config_hash.hexdigest()
-

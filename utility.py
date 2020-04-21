@@ -2,6 +2,17 @@ import struct
 import socket
 import netaddr
 
+def get_key(port, ip):
+    return ''.join([str(port), str(ip)])
+
+class TCPEndPoint:
+
+    def __init__(self, ip_str, port):
+        self.ip_str = ip_str
+        self.ip_int = Net.ipstr_to_int(ip_str)
+        self.ip_byte = Net.ipstr_to_bytes(ip_str)
+        self.port = port
+
 class Net:
 
     @staticmethod
@@ -9,6 +20,13 @@ class Net:
         number = int(str_mac.replace(':', ''), 16)
         return bin(number)
 
+    @staticmethod
+    def ptrqn_to_ipint(qn):
+        qn = qn[:-len('.in-addr.arpa') - 1]
+        parts = qn.split('.')
+        ip = '.'.join(reversed(parts))
+        return Net.ipstr_to_int(ip)
+         
     @staticmethod
     def ipstr_to_int(str_ip):
         return struct.unpack("!I", socket.inet_aton(str_ip))[0]
@@ -48,6 +66,7 @@ class Net:
         for octet in ip.split('.'):
             mac += ':{:02x}'.format(int(octet))
         return mac
+
 
 class Dictionary:
 
