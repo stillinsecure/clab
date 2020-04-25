@@ -1,13 +1,13 @@
+import asyncio
 import logging
 import socket
-import asyncio
+
 import iptc
 import netfilterqueue
-from dpkt import icmp, ip
-from protocolhandlers import (ICMPHandler, TCPHandler,
-                              UDPHandler)
-from proxies import TCPProxy
-from utility import Net, TCPEndPoint
+from dpkt import icmp, ip, tcp
+
+from proxies import ContainerProxy
+from utility import Net, TCPEndPoint, get_key
 
 IPTABLES_NFQUEUE = 'NFQUEUE'
 IPTABLES_QUEUE_NUM = 'queue-num'
@@ -38,7 +38,7 @@ class IPTableRules:
                 prerouting_chain.delete_rule(rule)
 
         output_chain = iptc.Chain(iptc.Table(
-            iptc.Table.FILTER), IPTABLES_OUTPUT)
+            iptc.Table.NAT), IPTABLES_PREROUTING)
 
         for index in range(len(output_chain.rules), 0, -1):
             rule = output_chain.rules[index-1]
@@ -46,7 +46,7 @@ class IPTableRules:
                 output_chain.delete_rule(rule)
 
         self.delete_chain(iptc.Table.MANGLE, self.config.router.chain_name)
-        self.delete_chain(iptc.Table.FILTER, self.config.router.chain_name)
+        self.delete_chain(iptc.Table.NAT, self.config.router.chain_name)
 
     def delete_chain(self, table_name, chain_name):
         table = iptc.Table(table_name)
@@ -67,8 +67,6 @@ class IPTableRules:
         assert ports is not None and len(
             ports) >= 1, 'Images need to be configured with TCP ports'
 
-        proxy_port = self.config.router.proxy_port
-
         self.delete_clab_chain()
 
         # Create a new CLAB chain in the MANGLE and FILTER tables
@@ -78,8 +76,8 @@ class IPTableRules:
         mangle_clab_chain = mangle_table.create_chain(
             self.config.router.chain_name)
 
-        filter_table = iptc.Table(iptc.Table.FILTER)
-        output_clab_chain = filter_table.create_chain(
+        nat_clab_chain = iptc.Table(iptc.Table.NAT)
+        nat_clab_chain = nat_clab_chain.create_chain(
             self.config.router.chain_name)
 
         tcp_ports = [str(port.num)
@@ -87,29 +85,32 @@ class IPTableRules:
         udp_ports = [str(port.num)
                      for port in ports if port.protocol == UDP_PROTOCOL]
 
-        # Rule to send all tcp traffic for containers with matching ports to the NFQUEUE
         if tcp_ports is not None and len(tcp_ports) > 0:
+            # Rule to send SYN packets to the NFQUEUE to track the container
+            # destination as well as act as a firewall to drop packets destined
+            # for services or containers that do not exist
             tcp_rule = iptc.Rule()
             tcp_rule.dst = clab_network
             tcp_rule.protocol = TCP_PROTOCOL_TXT
-            tcp_match = tcp_rule.create_match(IPTABLES_MULTIPORT)
-            tcp_match.dports = ','.join(tcp_ports)
-            tcp_target = tcp_rule.create_target(IPTABLES_NFQUEUE)
-            tcp_target.set_parameter(
+            state_match = tcp_rule.create_match('tcp')
+            state_match.tcp_flags = 'SYN'
+            multiport_match = tcp_rule.create_match('multiport')
+            multiport_match.dports = ','.join(tcp_ports)
+            queue_target = tcp_rule.create_target(IPTABLES_NFQUEUE)
+            queue_target.set_parameter(
                 IPTABLES_QUEUE_NUM, self.config.router.queue_num)
+
             mangle_clab_chain.insert_rule(tcp_rule)
 
-        # Rule to send all udp traffic for containers with matching ports to the NFQUEUE
-        if udp_ports is not None and len(udp_ports) > 0:
-            udp_rule = iptc.Rule()
-            udp_rule.dst = clab_network
-            udp_rule.protocol = UDP_PROTOCOL_TXT
-            udp_match = udp_rule.create_match(IPTABLES_MULTIPORT)
-            udp_match.dports = ','.join(udp_ports)
-            udp_target = udp_rule.create_target(IPTABLES_NFQUEUE)
-            udp_target.set_parameter(
-                IPTABLES_QUEUE_NUM, self.config.router.queue_num)
-            mangle_clab_chain.insert_rule(udp_rule)
+            # Rule to send all traffic to the proxy
+            tcp_rule = iptc.Rule()
+            tcp_rule.dst = clab_network
+            tcp_rule.protocol = TCP_PROTOCOL_TXT
+            multiport_match = tcp_rule.create_match('multiport')
+            multiport_match.dports = ','.join(tcp_ports)
+            connmark_target = tcp_rule.create_target('REDIRECT')
+            connmark_target.set_parameter('to-ports', '5996')
+            nat_clab_chain.insert_rule(tcp_rule)
 
         # Rule to send all icmp traffic for containers to the NFQUEUE
         icmp_rule = iptc.Rule()
@@ -119,44 +120,36 @@ class IPTableRules:
         icmp_target.set_parameter(
             IPTABLES_QUEUE_NUM, self.config.router.queue_num)
         mangle_clab_chain.insert_rule(icmp_rule)
-
-        # Rule to send all output packets from the proxy back to the NFQUEUE
-        # Proxy rule for tcp
-        proxy_rule = iptc.Rule()
-        proxy_rule.protocol = TCP_PROTOCOL_TXT
-        proxy_match = proxy_rule.create_match(TCP_PROTOCOL_TXT)
-        proxy_match.sport = str(proxy_port)
-        proxy_target = proxy_rule.create_target(IPTABLES_NFQUEUE)
-        proxy_target.set_parameter(
-            IPTABLES_QUEUE_NUM, self.config.router.queue_num)
-        output_clab_chain.insert_rule(proxy_rule)
-
-        # Create RULES to send traffic to the CLAB chain
-        prerouting_chain = iptc.Chain(iptc.Table(
+        
+        # Create a rule to send traffic to the CLAB chain from
+        # the mangle table prerouting chain
+        mangle_prerouting_chain = iptc.Chain(iptc.Table(
             iptc.Table.MANGLE), IPTABLES_PREROUTING)
         prerouting_rule = iptc.Rule()
         prerouting_rule.create_target(self.config.router.chain_name)
-        prerouting_chain.insert_rule(prerouting_rule)
+        mangle_prerouting_chain.insert_rule(prerouting_rule)
 
-        output_chain = iptc.Chain(iptc.Table(
-            iptc.Table.FILTER), IPTABLES_OUTPUT)
-        output_rule = iptc.Rule()
-        output_rule.create_target(self.config.router.chain_name)
-        output_chain.insert_rule(output_rule)
+        # Create a rule to send traffic to the CLAN chain from
+        # the nat table prerouting chain
+        nat_prerouting_chain = iptc.Chain(iptc.Table(
+            iptc.Table.NAT), IPTABLES_PREROUTING)
+        prerouting_rule = iptc.Rule()
+        prerouting_rule.create_target(self.config.router.chain_name)
+        nat_prerouting_chain.insert_rule(prerouting_rule)
 
 
-class NetfilterQueueHandler:
+class ContainerFirewall:
 
-    def __init__(self, container_mgr, config):
-        self.proxy_endpoint = TCPEndPoint(
-            config.router.get_interface_ip(), config.router.proxy_port)
+    def __init__(self, container_mgr, queue_num):
         self.nfqueue = netfilterqueue.NetfilterQueue()
-        self.queue_num = config.router.queue_num
-        self.container_mgr = container_mgr
+        self.queue_num = queue_num
         self.nfq_socket = None
-        self.icmp_handler = ICMPHandler(config)
-        self.proxy = TCPProxy(container_mgr, self.proxy_endpoint)
-        self.tcp_handler = TCPHandler(container_mgr, self.proxy)
+        self.container_addrs = {}
+        self.container_mgr = container_mgr
+        self.icmp_client = socket.socket(
+            socket.AF_INET, socket.SOCK_RAW, ip.IP_PROTO_RAW)
+        self.icmp_client.setblocking(False)
+        self.icmp_client.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, True)
 
     def __enter__(self):
         return self
@@ -165,23 +158,21 @@ class NetfilterQueueHandler:
         self.stop()
 
     def start(self, loop):
-        logging.info('Binding nfqueue')
+        logging.info('Starting container firewall on NFQUEUE %s',
+                     self.queue_num)
+
         self.nfqueue.bind(int(self.queue_num), self.process_packet)
         self.nfq_socket = socket.fromfd(
             self.nfqueue.get_fd(), socket.AF_UNIX, socket.SOCK_STREAM)
 
-        self.proxy.start(loop)
         # Register the file descriptor for read event
         loop.add_reader(self.nfq_socket, self.reader)
-        loop.run_forever()
 
     def stop(self):
         self.nfqueue.unbind()
         # If the queue bind failed the socket will be None
-        if not self.nfq_socket is None: 
+        if not self.nfq_socket is None:
             self.nfq_socket.close()
-        self.icmp_handler.close()
-        self.tcp_handler.close()
 
     def reader(self):
         self.nfqueue.get_packet(self.nfq_socket)
@@ -191,30 +182,50 @@ class NetfilterQueueHandler:
         dst_ip = Net.ipbytes_to_int(ip_hdr.dst)
         src_ip = Net.ipbytes_to_int(ip_hdr.src)
 
-        '''
-        logging.debug('Process_packet(tcp): %s:%s',
-                      Net.ipint_to_str(src_ip), Net.ipint_to_str(dst_ip))
-        '''
         if ip_hdr.p == ip.IP_PROTO_TCP:
             tcp_hdr = ip_hdr.data
-            result = self.tcp_handler.process(ip_hdr, tcp_hdr)
+            # See if there is a container registered to the specified dst and port
+            container = self.container_mgr.get_container_by_endpoint(
+                dst_ip, tcp_hdr.dport, 6)
 
-            if result.accept:
-                if result.modified:
-                    # Since the headers have been modified the chksums are
-                    # cleared and are recalculated in bytes conversion by dpkt
-                    ip_hdr.sum = 0
-                    tcp_hdr.sum = 0
-                    pkt.set_payload(bytes(ip_hdr))
+            # Only track if this is for a container
+            if container is not None:
+                logging.debug(
+                    'TCPHandler.process_packet(tcp): Found container %s', container.name)
+
+                # Store the dst address of the docker container so that
+                # outgoing packets can be modified with the correct
+                # source addr above
+                key = get_key(tcp_hdr.sport, src_ip)
+                self.container_addrs[key] = (dst_ip, tcp_hdr.dport)
                 pkt.accept()
             else:
                 pkt.drop()
-
-        if ip_hdr.p == ip.IP_PROTO_ICMP:
+        elif  ip_hdr.p == ip.IP_PROTO_ICMP:
+            # Drop all ICMP packets since the client will respond with
+            # the matching container
+            pkt.drop()
+            
             container = self.container_mgr.get_container_by_ip(dst_ip)
-            if container is not None:
-                result = self.icmp_handler.handle(
-                    container, ip_hdr, ip_hdr.data)
-                # ICMP requests are replied to by the handler so they will be dropped'
-                pkt.drop()
 
+            if container is not None:
+                src = ip_hdr.src
+                dst = ip_hdr.dst
+                org_dst_ip = Net.ipbytes_to_str(dst)
+                dst_ip = Net.ipbytes_to_str(src)
+
+                logging.debug('Echo request for %s %s', container.name, org_dst_ip)
+
+                icmp_reply = ip_hdr
+                icmp_reply.src = dst
+                icmp_reply.dst = src
+                icmp_reply.data.type = icmp.ICMP_ECHOREPLY
+                # Setting the checksums to 0 allows them to be recalculated when
+                # converted to bytes. Wireshark will not match up requests/reply if
+                # checksums are foo'd'
+                icmp_reply.data.sum = 0
+                icmp_reply.sum = 0
+
+                self.icmp_client.sendto(bytes(icmp_reply), (dst_ip, 1))
+    
+        

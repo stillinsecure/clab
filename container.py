@@ -30,34 +30,53 @@ class RunningContainer(object):
         self.status = CONTAINER_STOPPED
         self.event = asyncio.Event()
 
-    async def start_container_if_not_running(self, client):
+    async def start_container_if_not_running(self, pool):
         '''
         The aiodocker lib requires that the container be loaded and then started. This
         requires two calls to the API. This call allows the container to be started in
         one call to the API
         '''
-        async with client._query('containers/{}/start'.format(self.container_id),
-                                 method='POST',
-                                 headers={'content-type': 'application/json'}) as response:
-            if response.status == 204 or response.status == 304:
-                self.status = CONTAINER_STARTED
-            else:
-                logging.error('Unable to start the container %s %s', self.name, response.status)
-                self.status = CONTAINER_STOPPED
+        client = None
+        try:
+            client = await pool.get()
+            async with client._query('containers/{}/start'.format(self.container_id),
+                                    method='POST',
+                                    headers={'content-type': 'application/json'}) as response:
+                if response.status == 204 or response.status == 304:
+                    if response.status == 304:
+                        logging.debug('%s container is already running', self.name)
+                    self.status = CONTAINER_STARTED
+                else:
+                    logging.error('Unable to start the container %s %s', self.name, response.status)
+                    self.status = CONTAINER_STOPPED
+        except Exception as ex:
+            logging.error(ex)
+        finally:
+            if not client is None:
+                pool.put_nowait(client)
 
-    async def stop_container(self, client):
+    async def stop_container(self, pool):
         '''
         The aiodocker lib requires that the container be loaded and then stopped. This
         requires two calls to the API. This call allows the container to be stopped in
         one call to the API
         '''
+        client = None
         try:
+            client = await pool.get()
             async with client._query("containers/{}/stop".format(self.container_id),
-                                     method="POST") as response:
-                self.status = CONTAINER_STOPPED
-                pass
+                                    method="POST") as response:
+                if response.status == 204 or response.status == 304:
+                    if response.status == 304:
+                        logging.debug('%s container is already stopped', self.name)
+                    self.status = CONTAINER_STOPPED
+                else:
+                    logging.error('Unable to stop the container %s %s', self.name, response.status)
         except Exception as ex:
-            print(ex)
+            logging.error(ex)
+        finally:
+            if not client is None:
+                pool.put_nowait(client)
 
 
 class ContainerManager:
@@ -65,7 +84,10 @@ class ContainerManager:
     EndPoint = namedtuple('EndPoint', 'port ip container_name')
 
     def __init__(self, config):
-        self.client = aiodocker.Docker()
+        self.client = asyncio.Queue(25)
+        for n in range(25):
+            self.client.put_nowait(aiodocker.Docker())
+
         self.container_map_by_port = None
         self.container_map_by_ip = None
         self.container_map_by_name = None
@@ -98,7 +120,9 @@ class ContainerManager:
         Closes the docker API client
         '''
         logging.info('Stopping container manager')
-        await self.client.close()
+        for _ in range(25):
+            client = await self.client.get()
+            await client.close()
 
     async def monitor_idle_containers(self):
 
@@ -106,16 +130,13 @@ class ContainerManager:
 
         while True:
             try:
-                await asyncio.sleep(20)
+                await asyncio.sleep(10)
                 for key in list(self.running_containers.keys()):
                     container = self.running_containers[key]
                     if container.status == CONTAINER_STARTED:
                         last_seen = (datetime.now() -
                                      container.last_seen).total_seconds()
-                        if last_seen > 60:
-                            logging.info('Stopping the container %s',
-                                         container.name)
-
+                        if last_seen > 10:
                             try:
                                 container.event.clear()
                                 await container.stop_container(self.client)
@@ -125,7 +146,7 @@ class ContainerManager:
                             finally:
                                 container.event.set()
 
-                logging.debug('There are %s running containers',
+                logging.info('There are %s running containers',
                               len(self.running_containers))
 
                 if len(self.running_containers) == 0:
@@ -138,8 +159,16 @@ class ContainerManager:
 
     async def start_if_not_running(self, ip, port, protocol):
         logging.debug('Connection request %s %s', ip, port)
+        
+        if len(self.running_containers) > 40:
+            logging.info('Limiting to 40 running containers')
+            return None
+        
         container = self.get_container_by_endpoint(ip, port, protocol)
 
+        if container is None:
+            return None
+            
         if not container.name in self.running_containers:
             running_container = RunningContainer(container)
         else:
@@ -151,11 +180,15 @@ class ContainerManager:
         if running_container.status == CONTAINER_STOPPED:
             # Block anyone trying to do anything with this container
             try:
+                # Put the running container object in the collection so that
+                # another task that tries to start the same container it will
+                # wait. It goes in as stopped but will change to started when
+                # finished. If the container fails to start it will be stopped
+                # and the new task waiting will try to start it
+                self.running_containers[container.name] = running_container
                 running_container.event.clear()
                 logging.info('Starting container %s', container.name)
-
                 await running_container.start_container_if_not_running(self.client)
-                self.running_containers[container.name] = running_container
             finally:
                 # Let someone do something with this container
                 running_container.event.set()
@@ -179,6 +212,10 @@ class ContainerManager:
 
     def get_port_map_key(self, port, protocol):
         return int(''.join([str(protocol), str(port)]))
+
+    def get_container_by_name(self, name):
+        if name in self.container_map_by_name:
+            return self.container_map_by_name[name]
 
     def get_container_by_endpoint(self, ip, port, protocol):
         port_map_key = self.get_port_map_key(port, protocol)
@@ -211,11 +248,11 @@ class ContainerManager:
 
         containers = Container.select()
         for container in containers:
-            container_map_by_name[container.name] = container.ip
+            container_map_by_name[container.name] = container
 
         end_points = Port.select(Port.number, Port.protocol, Container.ip, Container.name,
                                  Container.container_id, Container.start_delay, Container.start_retry_count,
-                                 Container.start_on_create) \
+                                 Container.start_on_create, Container.sub_domain) \
             .join(Container)\
             .order_by(Port.number)
 
@@ -246,8 +283,10 @@ class ContainerManager:
                     image_to_pull = image_name
 
         if not image_to_pull is None:
+            client = aiodocker.Docker()
             logging.debug('Pulling down the image %s', image_name)
-            await self.client.images.pull(image_name)
+            await client.images.pull(image_name)
+            await client.close()
 
     async def setup_images(self, images_cfg):
 
@@ -257,7 +296,9 @@ class ContainerManager:
         image_ports = {}
         unique_ports = []
 
-        existing_images = await self.client.images.list()
+        client = aiodocker.Docker()
+         
+        existing_images = await client.images.list()
 
         # Pull down images defined in the images if they are
         # not already present on the local system
@@ -266,7 +307,7 @@ class ContainerManager:
             # Pull down the image if it is not already on the system
             await self.pull_image(image_cfg.name, existing_images)
 
-            image = await self.client.images.inspect(image_cfg.name)
+            image = await client.images.inspect(image_cfg.name)
 
             if Dictionary.has_attr(image, 'ContainerConfig', 'ExposedPorts'):
                 count += image_cfg.count
@@ -296,6 +337,7 @@ class ContainerManager:
                             unique_ports.append(port)
 
         assert count > 0, 'No images have been defined'
+        await client.close()
         return count, image_ports, unique_ports
 
     async def create_network(self, count):
@@ -305,9 +347,11 @@ class ContainerManager:
         logging.info('Creating network %s for %s hosts',
                      network_cfg.name, count)
 
+        client = aiodocker.Docker()
+         
         try:
             logging.debug('Removing docker network %s', network_cfg.name)
-            network = await self.client.networks.get(network_cfg.name)
+            network = await client.networks.get(network_cfg.name)
             await network.delete()
         except aiodocker.DockerError:
             pass
@@ -334,6 +378,7 @@ class ContainerManager:
         if network_cfg.address in addresses:
             addresses.remove(network_cfg.address)
 
+        # default is bridge
         config = {'Name': network_cfg.name, 'IPAM': {
                   'Driver': 'default',
                   'Config': [
@@ -345,16 +390,17 @@ class ContainerManager:
                   },
                   }
 
-        network = await self.client.networks.create(config)
+        network = await client.networks.create(config)
         logging.info('Created network %s %s %s %s -> %s', network_cfg.name, subnet,
                      ip.hostmask, utility.Net.ipint_to_str(ip.first), utility.Net.ipint_to_str(ip.last))
-
+        await client.close()
         return network, addresses, subnet
 
     async def delete_containers(self):
         logging.info('Deleting containers')
-
-        containers = await self.client.containers.list(all=True)
+        client = aiodocker.Docker()
+         
+        containers = await client.containers.list(all=True)
         # Remove the containers first
         for container in Container.select():
             logging.debug('Deleting %s', container.name)
@@ -369,6 +415,8 @@ class ContainerManager:
 
         for port in Port.select():
             port.delete_instance()
+        
+        await client.close()
 
     async def create_containers(self):
         # Clean up all the containers
@@ -421,15 +469,18 @@ class ContainerManager:
 
                 logging.debug('Creating container %s:%s',
                               host_name, image.name)
-                container = await self.client.containers.create(config, name=host_name)
-                
+                client = aiodocker.Docker()
+                container = await client.containers.create(config, name=host_name)
+                await client.close()
+
                 # Persist the container info to the db with the ports
                 # Ports are used to determine what listeners to create
                 new_container = Container.create(container_id=container.id,
                                                  name=host_name, ip=ip, mac=mac,
                                                  start_delay=image.start_delay,
                                                  start_retry_count=image.start_retry_count,
-                                                 start_on_create = image.start_on_create)
+                                                 start_on_create = image.start_on_create,
+                                                 sub_domain = image.sub_domain)
 
                 # Some containers perform a lot of startup work when run for the first time
                 # To mitigate this containers can be started and stopped on creation 
@@ -442,15 +493,4 @@ class ContainerManager:
                     Port.create(container=new_container.id,
                                 number=port.num, protocol=port.protocol)
 
-    async def start_container(self, id):
-        async with self.client._query(
-            'containers/{}/start'.format(id),
-            method='POST',
-            headers={'content-type': 'application/json'}
-        ):
-            pass
 
-    async def stop_container(self, id):
-        async with self.client._query(
-                "containers/{}/stop".format(id), method="POST"):
-            pass

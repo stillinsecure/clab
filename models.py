@@ -20,6 +20,8 @@ class Container(BaseModel):
     mac = CharField()
     start_delay = IntegerField()
     start_retry_count = IntegerField()
+    sub_domain = CharField()
+    
     # Some containers perform initial actions on first start such as 
     # create a db. If start_on_create is set to true the container
     # is started so that the action can be performed against the 

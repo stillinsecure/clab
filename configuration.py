@@ -143,6 +143,7 @@ class ImageConfig(BaseConfig):
         start_delay - The amount of time to wait in between connection attempts to
                         the container.
         start_retry_count - The number of times to retry the connection to the container
+        sub_domain - The sub domain to append to the host name
         """
         super().__init__(cfg_dict, None)
         self.desc = self.get_config_setting('desc')
@@ -151,6 +152,7 @@ class ImageConfig(BaseConfig):
         self.start_delay = self.get_config_setting('start_delay', 1)
         self.start_retry_count = self.get_config_setting('start_retry_count', 5)
         self.start_on_create = self.get_config_setting('start_on_create', False)
+        self.sub_domain = self.get_config_setting('sub_domain', '')
 
 class NamingConfig(BaseConfig):
 

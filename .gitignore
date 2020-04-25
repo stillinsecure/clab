@@ -1,9 +1,7 @@
-# PyCharm folder
 .vscode
 ~/
 .idea
 containers.db
-notes.txt
 *.swp
 config.sha256
 \tests
