@@ -198,6 +198,7 @@ class ContainerFirewall:
                 # source addr above
                 key = get_key(tcp_hdr.sport, src_ip)
                 self.container_addrs[key] = (dst_ip, tcp_hdr.dport)
+                pkt.set_mark(dst_ip)
                 pkt.accept()
             else:
                 pkt.drop()

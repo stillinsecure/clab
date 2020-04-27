@@ -141,7 +141,7 @@ class ContainerProxy:
                 remote_reader, remote_writer = await asyncio.open_connection(host, port)
             except Exception as err:
                 await asyncio.sleep(container.start_delay)
-                logging.info(err)
+                logging.debug(err)
                 continue
 
             # Pass the initial data that was received above plus the container

@@ -1,3 +1,4 @@
+import json
 import asyncio
 import logging
 import re
@@ -281,6 +282,9 @@ class ContainerManager:
             for existing_image in existing_images:
                 if not image_name in existing_image['RepoTags']:
                     image_to_pull = image_name
+                else:
+                    image_to_pull = None
+                    break
 
         if not image_to_pull is None:
             client = aiodocker.Docker()
@@ -469,9 +473,9 @@ class ContainerManager:
 
                 logging.debug('Creating container %s:%s',
                               host_name, image.name)
-                client = aiodocker.Docker()
+                client = await self.client.get()
                 container = await client.containers.create(config, name=host_name)
-                await client.close()
+                self.client.put_nowait(client)
 
                 # Persist the container info to the db with the ports
                 # Ports are used to determine what listeners to create
