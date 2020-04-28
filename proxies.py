@@ -25,8 +25,7 @@ class ContainerProxy:
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # This option allows multiple processes to listen on the same port
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        server_socket.bind((self.endpoint.ip_str, self.endpoint.port))
-
+        server_socket.bind(('0.0.0.0', self.endpoint.port))
         return asyncio.start_server(self.client_connected,
                                            sock=server_socket,
                                            loop=loop)

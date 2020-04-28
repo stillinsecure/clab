@@ -1,7 +1,7 @@
 images:
 - name: gotechnies/alpine-ssh:latest
   desc: research
-  count: 2500 
+  count: 1 
   start_on_create: false
   sub_domain: research1 
 

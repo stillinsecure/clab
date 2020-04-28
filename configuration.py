@@ -78,6 +78,7 @@ class NetworkHandlerConfig(BaseConfig):
         self.chain_name = self.get_config_setting('chain_name')
 
     def get_interface_ip(self):
+        return '0.0.0.0'
         """
         Returns the IP address assigned to the interface specified in the
         configuration
