@@ -29,6 +29,9 @@ class IPTableRules:
         self.config = config
 
     def delete_clab_chain(self):
+        '''
+        Deletes the clab chains from the nat and mangle tables
+        '''
         prerouting_chain = iptc.Chain(iptc.Table(
             iptc.Table.MANGLE), IPTABLES_PREROUTING)
 
@@ -49,6 +52,9 @@ class IPTableRules:
         self.delete_chain(iptc.Table.NAT, self.config.router.chain_name)
 
     def delete_chain(self, table_name, chain_name):
+        '''
+        Delets the specified chain that belong to the table
+        '''
         table = iptc.Table(table_name)
         for table_index in range(len(table.chains), 0, -1):
             chain = table.chains[table_index-1]
@@ -76,14 +82,18 @@ class IPTableRules:
         mangle_clab_chain = mangle_table.create_chain(
             self.config.router.chain_name)
 
-        nat_clab_chain = iptc.Table(iptc.Table.NAT)
-        nat_clab_chain = nat_clab_chain.create_chain(
+        nat_table = iptc.Table(iptc.Table.NAT)
+        nat_clab_chain = nat_table.create_chain(
             self.config.router.chain_name)
 
-        tcp_ports = [str(port.num)
-                     for port in ports if port.protocol == TCP_PROTOCOL]
-        udp_ports = [str(port.num)
-                     for port in ports if port.protocol == UDP_PROTOCOL]
+        # Get a unique list of ports for tcp and udp
+        tcp_ports = set([str(port.num)
+                     for port in ports if port.protocol == TCP_PROTOCOL])
+        udp_ports = set([str(port.num)
+                     for port in ports if port.protocol == UDP_PROTOCOL])
+
+        tcp_ports = list(tcp_ports)
+        udp_ports = list(udp_ports)
 
         if tcp_ports is not None and len(tcp_ports) > 0:
             # Rule to send SYN packets to the NFQUEUE to track the container
@@ -108,8 +118,8 @@ class IPTableRules:
             tcp_rule.protocol = TCP_PROTOCOL_TXT
             multiport_match = tcp_rule.create_match('multiport')
             multiport_match.dports = ','.join(tcp_ports)
-            connmark_target = tcp_rule.create_target('REDIRECT')
-            connmark_target.set_parameter('to-ports', '5996')
+            redirect_target = tcp_rule.create_target('REDIRECT')
+            redirect_target.set_parameter('to-ports', '5996')
             nat_clab_chain.insert_rule(tcp_rule)
 
         # Rule to send all icmp traffic for containers to the NFQUEUE
@@ -136,7 +146,6 @@ class IPTableRules:
         prerouting_rule = iptc.Rule()
         prerouting_rule.create_target(self.config.router.chain_name)
         nat_prerouting_chain.insert_rule(prerouting_rule)
-
 
 class ContainerFirewall:
 

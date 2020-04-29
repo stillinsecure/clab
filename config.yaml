@@ -5,23 +5,23 @@ images:
   start_on_create: false
   sub_domain: research1 
 
-#- name: iliyan/docker-nginx-sshd:latest
-#  desc: research
-#  count: 1
-#  start_on_create: True
-#  sub_domain: www.research1 
+- name: iliyan/docker-nginx-sshd:latest
+  desc: research
+  count: 1
+  start_on_create: True
+  sub_domain: www.research1 
 
-#- name: jdeathe/centos-ssh-mysql:latest
-#  desc: research
-#  count: 1
-#  start_on_create: True
-#  sub_domain: mysql.research1 
+- name: jdeathe/centos-ssh-mysql:latest
+  desc: research
+  count: 1
+  start_on_create: True
+  sub_domain: mysql.research1 
 
-#- name: osixia/openldap:1.3.0
-#  desc: research
-#  count: 1 
-#  start_on_create: True
-#  sub_domain: ldap.research1 
+- name: osixia/openldap:1.3.0
+  desc: research
+  count: 1 
+  start_on_create: True
+  sub_domain: ldap.research1 
 
 naming:
   allowable_host_chars: '[^a-z0-9]'

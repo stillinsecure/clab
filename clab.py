@@ -10,7 +10,7 @@ from proxies import ContainerProxy
 from configuration import Configuration
 from container import ContainerManager
 from models import close_database, setup_database
-from netfilter import ContainerFirewall, TCPEndPoint
+from netfilter import ContainerFirewall, TCPEndPoint, IPTableRules
 from multiprocessing import Process
 
 BANNER = """
@@ -80,6 +80,8 @@ if __name__ == '__main__':
             container_mgr.view()
         # Deletes the docker containers and entries in the containers.db
         elif args.delete:
+            iptables = IPTableRules(config)
+            iptables.delete_clab_chain()
             loop.run_until_complete(container_mgr.delete_containers())
 
         elif args.create or args.run:
