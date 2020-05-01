@@ -45,10 +45,10 @@ container_network:
   
 firewall:
   queue_num: "0"
-  interface: ens33
+  interface: lo
   proxy_port: 5996
   chain_name: CLAB
-  read_buffer: 2048
+  read_buffer: 1024
 
 container_manager:
   client_pool: 25

@@ -61,7 +61,7 @@ class ContainerProxy:
         '''
         try:
             # If the call to open_connection failed, the writer
-            # will be null
+            # will be null1
             if not writer is None:
                 writer.close()
                 await writer.wait_closed()
@@ -101,10 +101,8 @@ class ContainerProxy:
             source_ip = Net.ipstr_to_int(source_addr[0])
             source_port = source_addr[1]
             container_addr = self.container_mgr.connections.get(source_ip, source_port)
-            # Need to figure out how this happens the port number does not show
-            # up on the client host under netstat.
+            # This can happen if someone tries to connect directly to tcp:5996
             if container_addr is None:
-                logging.error('Unable to find the firewall key for {} {}', str(source_ip), str(source_port))
                 await self.close_stream_writer(client_writer)
                 return
 

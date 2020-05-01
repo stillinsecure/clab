@@ -81,7 +81,6 @@ class FirewallConfig(BaseConfig):
         self.read_client = self.get_config_setting('read_client', False)
 
     def get_interface_ip(self):
-        return '0.0.0.0'
         """
         Returns the IP address assigned to the interface specified in the
         configuration

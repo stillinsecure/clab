@@ -103,6 +103,8 @@ class ContainerConnectionMapping:
             del self.connection_maps[key]
             return connection_mapping
         else:
+            ip = utility.Net.ipint_to_str(source_ip)
+            logging.error('Unable to find a container connection for %s %s', ip, source_port)   
             return None
 
     def __get_key(self, port, ip):
