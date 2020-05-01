@@ -5,9 +5,7 @@ import socket
 import iptc
 import netfilterqueue
 from dpkt import icmp, ip, tcp
-
-from proxies import ContainerProxy
-from utility import Net, TCPEndPoint, get_key
+from utility import Net, TCPEndPoint
 
 IPTABLES_NFQUEUE = 'NFQUEUE'
 IPTABLES_QUEUE_NUM = 'queue-num'
@@ -37,7 +35,7 @@ class IPTableRules:
 
         for index in range(len(prerouting_chain.rules), 0, -1):
             rule = prerouting_chain.rules[index-1]
-            if rule.target.name == self.config.router.chain_name:
+            if rule.target.name == self.config.firewall.chain_name:
                 prerouting_chain.delete_rule(rule)
 
         output_chain = iptc.Chain(iptc.Table(
@@ -45,11 +43,11 @@ class IPTableRules:
 
         for index in range(len(output_chain.rules), 0, -1):
             rule = output_chain.rules[index-1]
-            if rule.target.name == self.config.router.chain_name:
+            if rule.target.name == self.config.firewall.chain_name:
                 output_chain.delete_rule(rule)
 
-        self.delete_chain(iptc.Table.MANGLE, self.config.router.chain_name)
-        self.delete_chain(iptc.Table.NAT, self.config.router.chain_name)
+        self.delete_chain(iptc.Table.MANGLE, self.config.firewall.chain_name)
+        self.delete_chain(iptc.Table.NAT, self.config.firewall.chain_name)
 
     def delete_chain(self, table_name, chain_name):
         '''
@@ -80,11 +78,11 @@ class IPTableRules:
         # on every run
         mangle_table = iptc.Table(iptc.Table.MANGLE)
         mangle_clab_chain = mangle_table.create_chain(
-            self.config.router.chain_name)
+            self.config.firewall.chain_name)
 
         nat_table = iptc.Table(iptc.Table.NAT)
         nat_clab_chain = nat_table.create_chain(
-            self.config.router.chain_name)
+            self.config.firewall.chain_name)
 
         # Get a unique list of ports for tcp and udp
         tcp_ports = set([str(port.num)
@@ -108,7 +106,7 @@ class IPTableRules:
             multiport_match.dports = ','.join(tcp_ports)
             queue_target = tcp_rule.create_target(IPTABLES_NFQUEUE)
             queue_target.set_parameter(
-                IPTABLES_QUEUE_NUM, self.config.router.queue_num)
+                IPTABLES_QUEUE_NUM, self.config.firewall.queue_num)
 
             mangle_clab_chain.insert_rule(tcp_rule)
 
@@ -128,7 +126,7 @@ class IPTableRules:
         icmp_rule.protocol = ICMP_PROTOCOL_TXT
         icmp_target = icmp_rule.create_target(IPTABLES_NFQUEUE)
         icmp_target.set_parameter(
-            IPTABLES_QUEUE_NUM, self.config.router.queue_num)
+            IPTABLES_QUEUE_NUM, self.config.firewall.queue_num)
         mangle_clab_chain.insert_rule(icmp_rule)
         
         # Create a rule to send traffic to the CLAB chain from
@@ -136,7 +134,7 @@ class IPTableRules:
         mangle_prerouting_chain = iptc.Chain(iptc.Table(
             iptc.Table.MANGLE), IPTABLES_PREROUTING)
         prerouting_rule = iptc.Rule()
-        prerouting_rule.create_target(self.config.router.chain_name)
+        prerouting_rule.create_target(self.config.firewall.chain_name)
         mangle_prerouting_chain.insert_rule(prerouting_rule)
 
         # Create a rule to send traffic to the CLAN chain from
@@ -144,7 +142,7 @@ class IPTableRules:
         nat_prerouting_chain = iptc.Chain(iptc.Table(
             iptc.Table.NAT), IPTABLES_PREROUTING)
         prerouting_rule = iptc.Rule()
-        prerouting_rule.create_target(self.config.router.chain_name)
+        prerouting_rule.create_target(self.config.firewall.chain_name)
         nat_prerouting_chain.insert_rule(prerouting_rule)
 
 class ContainerFirewall:
@@ -153,7 +151,6 @@ class ContainerFirewall:
         self.nfqueue = netfilterqueue.NetfilterQueue()
         self.queue_num = queue_num
         self.nfq_socket = None
-        self.container_addrs = {}
         self.container_mgr = container_mgr
         self.icmp_client = socket.socket(
             socket.AF_INET, socket.SOCK_RAW, ip.IP_PROTO_RAW)
@@ -203,11 +200,9 @@ class ContainerFirewall:
                     'TCPHandler.process_packet(tcp): Found container %s', container.name)
 
                 # Store the dst address of the docker container so that
-                # outgoing packets can be modified with the correct
-                # source addr above
-                key = get_key(tcp_hdr.sport, src_ip)
-                self.container_addrs[key] = (dst_ip, tcp_hdr.dport)
-                pkt.set_mark(dst_ip)
+                # when the connection is made to the proxy the proxy knows
+                # what container to start
+                self.container_mgr.connections.add(src_ip, tcp_hdr.sport, dst_ip, tcp_hdr.dport)
                 pkt.accept()
             else:
                 pkt.drop()

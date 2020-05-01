@@ -2,8 +2,6 @@ import struct
 import socket
 import netaddr
 
-def get_key(port, ip):
-    return ''.join([str(port), str(ip)])
 
 class TCPEndPoint:
 

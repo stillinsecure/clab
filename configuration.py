@@ -62,7 +62,7 @@ class BaseConfig:
         return value
 
 
-class NetworkHandlerConfig(BaseConfig):
+class FirewallConfig(BaseConfig):
 
     def __init__(self, cfg_dict):
         """
@@ -71,11 +71,14 @@ class NetworkHandlerConfig(BaseConfig):
 
         proxy_port - The port that the tcp proxy server will bind to
         """
-        super().__init__(cfg_dict, 'network_handler')
+        super().__init__(cfg_dict, 'firewall')
         self.queue_num = self.get_config_setting('queue_num')
         self.interface = self.get_config_setting('interface')
         self.proxy_port = self.get_config_setting('proxy_port')
         self.chain_name = self.get_config_setting('chain_name')
+        self.max_containers = self.get_config_setting('max_containers', 40)
+        self.read_buffer = self.get_config_setting('read_buffer', 1024)
+        self.read_client = self.get_config_setting('read_client', False)
 
     def get_interface_ip(self):
         return '0.0.0.0'
@@ -154,6 +157,7 @@ class ImageConfig(BaseConfig):
         self.start_retry_count = self.get_config_setting('start_retry_count', 5)
         self.start_on_create = self.get_config_setting('start_on_create', False)
         self.sub_domain = self.get_config_setting('sub_domain', '')
+        self.env_variables = self.get_config_setting('env_variables', [])
 
 class NamingConfig(BaseConfig):
 
@@ -174,6 +178,16 @@ class NamingConfig(BaseConfig):
         self.allowable_host_chars = self.get_config_setting(
             'allowable_host_chars')
 
+class ContainerManagerConfig(BaseConfig):
+
+    def __init__(self, cfg_dict):
+        """
+        """
+        super().__init__(cfg_dict, 'container_manager')
+        self.client_pool = self.get_config_setting('client_pool', 25)
+        self.max_containers = self.get_config_setting('max_containers', 50)
+        self.poll_time = self.get_config_setting('poll_time', 1)
+        self.expire_after = self.get_config_setting('expire_after')
 
 class ConfigurationException(Exception):
     pass
@@ -185,7 +199,8 @@ class Configuration():
         self.images = None
         self.naming = None
         self.network = None
-        self.router = None
+        self.firewall = None
+        self.container_manager = None
 
     def open(self, file_name, ignore_changes=True):
         if not path.isfile(file_name):
@@ -208,7 +223,8 @@ class Configuration():
             self.images = ImagesConfig(cfg)
             self.naming = NamingConfig(cfg)
             self.network = NetworkConfig(cfg)
-            self.router = NetworkHandlerConfig(cfg)
+            self.firewall = FirewallConfig(cfg)
+            self.container_manager = ContainerManagerConfig(cfg)
 
     def __read_hash(self):
         if path.isfile(HASH_FILE):
