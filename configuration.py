@@ -120,8 +120,9 @@ class ImagesConfig(BaseConfig):
         super().__init__(cfg_dict, 'images')
         self.index = 0
         self.images = []
-        for image_cfg in self.cfg_dict:
-            self.images.append(ImageConfig(image_cfg))
+        if not self.cfg_dict is None:
+            for image_cfg in self.cfg_dict:
+                self.images.append(ImageConfig(image_cfg))
 
     def __iter__(self):
         self.index = 0
@@ -157,6 +158,7 @@ class ImageConfig(BaseConfig):
         self.start_on_create = self.get_config_setting('start_on_create', False)
         self.sub_domain = self.get_config_setting('sub_domain', '')
         self.env_variables = self.get_config_setting('env_variables', [])
+        self.startup_script = self.get_config_setting('startup_script', '')
 
 class NamingConfig(BaseConfig):
 

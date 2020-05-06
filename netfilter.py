@@ -30,40 +30,38 @@ class IPTableRules:
         '''
         Deletes the clab chains from the nat and mangle tables
         '''
-        prerouting_chain = iptc.Chain(iptc.Table(
-            iptc.Table.MANGLE), IPTABLES_PREROUTING)
+        self.delete_chain(iptc.Table.MANGLE, IPTABLES_PREROUTING,  self.config.firewall.chain_name)
+        self.delete_chain(iptc.Table.NAT, IPTABLES_PREROUTING, self.config.firewall.chain_name)
 
-        for index in range(len(prerouting_chain.rules), 0, -1):
-            rule = prerouting_chain.rules[index-1]
-            if rule.target.name == self.config.firewall.chain_name:
-                prerouting_chain.delete_rule(rule)
-
-        output_chain = iptc.Chain(iptc.Table(
-            iptc.Table.NAT), IPTABLES_PREROUTING)
-
-        for index in range(len(output_chain.rules), 0, -1):
-            rule = output_chain.rules[index-1]
-            if rule.target.name == self.config.firewall.chain_name:
-                output_chain.delete_rule(rule)
-
-        self.delete_chain(iptc.Table.MANGLE, self.config.firewall.chain_name)
-        self.delete_chain(iptc.Table.NAT, self.config.firewall.chain_name)
-
-    def delete_chain(self, table_name, chain_name):
+    def delete_chain(self, table_name, chain_name, delete_chain_name):
         '''
-        Delets the specified chain that belong to the table
+        Deletes rules from the specified table that have a target of 
+        delete chain name. It then deletes the chain from the table.
         '''
         table = iptc.Table(table_name)
-        for table_index in range(len(table.chains), 0, -1):
-            chain = table.chains[table_index-1]
-            if chain.name == chain_name:
-                for chain_index in range(len(chain.rules), 0, -1):
-                    rule = chain.rules[chain_index-1]
-                    chain.delete_rule(rule)
-                table.delete_chain(chain)
-                return
+        chain = iptc.Chain(table, chain_name)
+
+        # Remove all rules from the specified chain that have a target matching
+        # the delete chain name
+        for rule in chain.rules:
+            if rule.target.name == delete_chain_name:
+                chain.delete_rule(rule)
+        
+        # Remove all rules from the target chain and then delete the target chain
+        try:
+            target_chain = iptc.Chain(table, delete_chain_name)
+            target_chain.flush()
+            target_chain.delete()   
+        except iptc.ip4tc.IPTCError as ex:
+            if len(ex.args) > 0 and 'No chain/target/match by that name' in ex.args[0]:
+                pass
+            else:
+                raise ex
 
     def create(self, clab_network, ports):
+        '''
+        Creates the iptables chains and rules to support clab
+        '''
         logging.info('Setting up iptables')
 
         assert clab_network is not None and len(
@@ -79,11 +77,11 @@ class IPTableRules:
         mangle_table = iptc.Table(iptc.Table.MANGLE)
         mangle_clab_chain = mangle_table.create_chain(
             self.config.firewall.chain_name)
-
+       
         nat_table = iptc.Table(iptc.Table.NAT)
         nat_clab_chain = nat_table.create_chain(
             self.config.firewall.chain_name)
-
+       
         # Get a unique list of ports for tcp and udp
         tcp_ports = set([str(port.num)
                      for port in ports if port.protocol == TCP_PROTOCOL])
@@ -117,7 +115,7 @@ class IPTableRules:
             multiport_match = tcp_rule.create_match('multiport')
             multiport_match.dports = ','.join(tcp_ports)
             redirect_target = tcp_rule.create_target('REDIRECT')
-            redirect_target.set_parameter('to-ports', '5996')
+            redirect_target.set_parameter('to-ports', str(self.config.firewall.proxy_port))
             nat_clab_chain.insert_rule(tcp_rule)
 
         # Rule to send all icmp traffic for containers to the NFQUEUE

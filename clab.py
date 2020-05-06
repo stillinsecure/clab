@@ -60,6 +60,8 @@ if __name__ == '__main__':
                             help='yaml file used to configure a deployment')
         parser.add_argument('--ignore', default='store_true',
                             help='Ignore configuration changes detection')                    
+        parser.add_argument('--update', action='store_true',
+                            help='Images defined in the config file are appended to the current deployment')                    
         args = parser.parse_args()
 
         print(BANNER)
@@ -75,7 +77,7 @@ if __name__ == '__main__':
         logging.logProcesses = 0
         logging.basicConfig(
             format='%(asctime)s %(levelname)-8s %(message)s',
-            level=logging.DEBUG,
+            level=logging.INFO,
             datefmt='%Y-%m-%d %H:%M:%S')
         
         # Sets up the database for Peewee ORM
@@ -89,18 +91,15 @@ if __name__ == '__main__':
             builder.view()
         # Deletes the docker containers and entries in the containers.db
         elif args.delete:
-            iptables = IPTableRules(config)
-            iptables.delete_clab_chain()
-
             builder = ContainerBuilder(config)
             loop.run_until_complete(builder.delete_containers())
 
-        elif args.create or args.run:
+        elif args.create or args.run or args.update:
             
             # Create a new deployment, this overwrites any existing deployment
-            if args.create:
+            if args.create or args.update:
                 builder = ContainerBuilder(config)
-                loop.run_until_complete(builder.create_containers())
+                loop.run_until_complete(builder.create_containers(args.update))
 
             # Start the tcp proxy
             if args.run:
@@ -117,6 +116,8 @@ if __name__ == '__main__':
                 proxy_server = ContainerProxy(container_mgr, config)
                 loop.run_until_complete(proxy_server.start(loop))
                 loop.run_forever()
+
+                container_mgr.stop()
                 
     except Exception as e:
         traceback.print_exc(file=sys.stdout)

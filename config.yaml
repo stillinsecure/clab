@@ -1,18 +1,33 @@
 images:
-- name: gotechnies/alpine-ssh:latest
-  desc: research
-  count: 1
-  start_on_create: false
-  sub_domain: alpine.research1 
-
-- name: mcr.microsoft.com/mssql/server:2017-latest
-  desc: SQL Server
+- name: osixia/openldap:1.3.0
+  desc: ldap
   count: 1
   start_on_create: True
-  sub_domain: mssql.research1 
-  env_variables:
-  - 'ACCEPT_EULA=Y'
-  - 'SA_PASSWORD=yourStrong(!)Password'
+  sub_domain: ldap 
+  
+#- name: gotechnies/alpine-ssh:latest
+#  desc: alpine
+#  count: 100
+#  start_on_create: True
+#  sub_domain: alpine.research1 
+#  startup_script: create_users_alpine.sh alpine_users.csv
+
+#- name: rastasheep/ubuntu-sshd
+#  desc: ubuntu
+#  count: 1
+#  start_on_create: True
+#  sub_domain: ubuntu.research1 
+#  startup_script: create_users.sh users.csv
+
+
+#- name: mcr.microsoft.com/mssql/server:2017-latest
+#  desc: SQL Server
+#  count: 10
+#  start_on_create: True
+#  sub_domain: mssql.research1 
+#  env_variables:
+#  - 'ACCEPT_EULA=Y'
+#  - 'SA_PASSWORD=yourStrong(!)Password'
 
 #- name: iliyan/docker-nginx-sshd:latest
 #  desc: research
@@ -54,4 +69,4 @@ container_manager:
   client_pool: 25
   max_containers: 40
   poll_time: 1
-  expire_after: 5
+  expire_after: 20

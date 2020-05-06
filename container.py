@@ -1,3 +1,5 @@
+import aiohttp
+import os
 import json
 import asyncio
 import logging
@@ -20,7 +22,7 @@ ExposedPort = namedtuple('ExposedPort', 'num text protocol')
 
 CONTAINER_STARTED = 1
 CONTAINER_STOPPED = 3
-
+SCRIPTS_DIR = '/scripts'
 
 class RunningContainer(object):
 
@@ -83,6 +85,7 @@ class RunningContainer(object):
             if not client is None:
                 pool.put_nowait(client)
 
+
 class ContainerConnectionMapping:
 
     def __init__(self):
@@ -93,10 +96,10 @@ class ContainerConnectionMapping:
 
         key = self.__get_key(source_ip, source_port)
         self.connection_maps[key] = (dest_ip, dest_port)
-    
+
     def get(self, source_ip, source_port):
         self.connections_made = self.connections_made + 1
-       
+
         key = self.__get_key(source_ip, source_port)
         if key in self.connection_maps:
             connection_mapping = self.connection_maps[key]
@@ -104,11 +107,13 @@ class ContainerConnectionMapping:
             return connection_mapping
         else:
             ip = utility.Net.ipint_to_str(source_ip)
-            logging.error('Unable to find a container connection for %s %s', ip, source_port)   
+            logging.error(
+                'Unable to find a container connection for %s %s', ip, source_port)
             return None
 
     def __get_key(self, port, ip):
         return ''.join([str(port), str(ip)])
+
 
 class ContainerManager:
 
@@ -127,7 +132,7 @@ class ContainerManager:
         self.config = config
         self.idle_monitor_task = None
         self.connections = ContainerConnectionMapping()
-
+  
     def start(self):
         '''
         Loads the containers into dictionaries for fast retrieval
@@ -208,7 +213,7 @@ class ContainerManager:
             # Block anyone trying to do anything with this container
             try:
                 # Put the running container object in the collection so that
-                # another task that tries to start the same container it will
+                # another task that tries to start the same container will
                 # wait. It goes in as stopped but will change to started when
                 # finished. If the container fails to start it will be stopped
                 # and the new task waiting will try to start it
@@ -317,7 +322,7 @@ class ContainerBuilder:
 
     def __init__(self, config):
         self.config = config
-       
+
     def view(self, container_map_by_port=None, container_map_by_ip=None):
         '''
         Displays the created containers specified by the current configuration
@@ -348,17 +353,26 @@ class ContainerBuilder:
             await client.images.pull(image_name)
             await client.close()
 
-    async def setup_images(self, images_cfg):
+    async def setup_images(self, images_cfg, update):
 
         logging.info('Setting up images')
 
         count = 0
         image_ports = {}
-        unique_ports = []
+        unique_ports = {}
 
         client = aiodocker.Docker()
 
         existing_images = await client.images.list()
+
+        # If updating an existing deployment then create a list of 
+        # existing ports
+        if update:
+            existing_ports = Port.select(Port.number).distinct()
+        
+            for existing_port in existing_ports:
+                port = ExposedPort(existing_port.number, '{}/tcp'.format(existing_port.number), TCP_PROTOCOL)
+                unique_ports[existing_port.number] = port
 
         # Pull down images defined in the images if they are
         # not already present on the local system
@@ -378,7 +392,7 @@ class ContainerBuilder:
                     match = re.search('(\d+)\/(tcp|udp)', exposed_port)
 
                     if match is not None:
-                        port_num = match.group(1)
+                        port_num = int(match.group(1))
                         protocol = match.group(2)
 
                         if protocol == TCP_PROTOCOL_TXT:
@@ -394,20 +408,27 @@ class ContainerBuilder:
                         image_ports[image_cfg.name].append(port)
 
                         if port_num not in unique_ports:
-                            unique_ports.append(port)
+                            unique_ports[port_num] = port
 
-        assert count > 0, 'No images have been defined'
         await client.close()
-        return count, image_ports, unique_ports
+        return count, image_ports, unique_ports.values()
 
-    async def create_network(self, count):
-        assert count > 0, 'Host count is 0'
+    async def create_network(self, count, update):
+        '''
+        Creates a docker network with a subnet to match the number of
+        containers specified by count
+        '''
+        client = aiodocker.Docker()
+
+        # If updating, ensure that the existing container count is included
+        if update:
+            existing_addresses = Container.select(Container.ip).distinct()
+            count = count + len(existing_addresses)
+
 
         network_cfg = self.config.network
         logging.info('Creating network %s for %s hosts',
                      network_cfg.name, count)
-
-        client = aiodocker.Docker()
 
         try:
             logging.debug('Removing docker network %s', network_cfg.name)
@@ -438,6 +459,12 @@ class ContainerBuilder:
         if network_cfg.address in addresses:
             addresses.remove(network_cfg.address)
 
+        # When upgrading remove existing addresses from the pool
+        if update:
+            for existing_address in existing_addresses:
+                if existing_address.ip in addresses:
+                    addresses.remove(existing_address.ip)
+
         # default is bridge
         config = {'Name': network_cfg.name, 'IPAM': {
                   'Driver': 'default',
@@ -457,7 +484,11 @@ class ContainerBuilder:
         return network, addresses, subnet
 
     async def delete_containers(self):
+        '''
+        Deletes the containers in docker and the db records
+        '''
         logging.info('Deleting containers')
+        
         client = aiodocker.Docker()
 
         containers = await client.containers.list(all=True)
@@ -477,16 +508,17 @@ class ContainerBuilder:
             port.delete_instance()
 
         await client.close()
-
-    async def create_containers(self):
-        # Clean up all the containers
-        await self.delete_containers()
+    
+    async def create_containers(self, update):
+        # Clean up all the containers 
+        if not update:
+            await self.delete_containers()
 
         # Make sure the defined images are available and config the ports
-        count, image_ports, unique_ports = await self.setup_images(self.config.images)
+        count, image_ports, unique_ports = await self.setup_images(self.config.images, update)
 
         # Create a network for the containers
-        _network, addresses, subnet = await self.create_network(count)
+        _network, addresses, subnet = await self.create_network(count, update)
 
         # Apply the iptable rules required for the configured images
         rules = IPTableRules(self.config)
@@ -498,10 +530,10 @@ class ContainerBuilder:
         naming = Naming()
         host_names = naming.generate_host_names(self.config.naming, count)
 
-        client = aiodocker.Docker()
-        client_pool = asyncio.Queue()
-        client_pool.put_nowait(client)
+        scripts_dir = ''.join([os.getcwd(), SCRIPTS_DIR])
+        logging.info('Using %s for script directory', scripts_dir)
 
+        client = aiodocker.Docker()
         for image in self.config.images:
 
             # If the image has no exposed ports then there is no use in
@@ -511,7 +543,6 @@ class ContainerBuilder:
 
             ports = [port.text for port in image_ports[image.name]]
             ports = dict.fromkeys(ports, {})
-
             for count in range(image.count):
                 host_name = host_names.pop()
                 ip = addresses.pop()
@@ -521,6 +552,25 @@ class ContainerBuilder:
                           'ExposedPorts': ports,
                           'MacAddress': mac,
                           'Env': image.env_variables,
+                          'HostConfig': {
+                              'Mounts': [
+                                  {
+                                      "Type": "bind",
+                                      "Source": scripts_dir,
+                                      "Target": SCRIPTS_DIR,
+                                  }
+                              ],
+                          },
+                          "Mounts": [
+                              {
+                                  "Type": "bind",
+                                  "Source": scripts_dir,
+                                  "Destination": SCRIPTS_DIR,
+                                  "Mode": "",
+                                  "RW": 'true',
+                                  "Propagation": "rprivate"
+                              }
+                          ],
                           'NetworkingConfig': {
                               'EndpointsConfig': {
                                   'clab': {
@@ -535,7 +585,7 @@ class ContainerBuilder:
                 logging.debug('Creating container %s:%s',
                               host_name, image.name)
                 container = await client.containers.create(config, name=host_name)
-                
+
                 # Persist the container info to the db with the ports
                 # Ports are used to determine what listeners to create
                 new_container = Container.create(container_id=container.id,
@@ -548,13 +598,35 @@ class ContainerBuilder:
                 # Some containers perform a lot of startup work when run for the first time
                 # To mitigate this containers can be started and stopped on creation
                 if image.start_on_create:
-                    runningContainer = RunningContainer(new_container)
-                    await runningContainer.start_container_if_not_running(client_pool)
-                    await runningContainer.stop_container(client_pool)
+                    await self.start_container_on_create(image, new_container, client)
 
                 for port in image_ports[image.name]:
                     Port.create(container=new_container.id,
                                 number=port.num, protocol=port.protocol)
-        
+
         await client.close()
-   
+
+    async def start_container_on_create(self, image, container, client):
+        '''
+        Starts the container when it is created and optionally runs startup
+        scripts. Some containers such as mysql create the db on first start so
+        this option allows this initialization to occur before the proxy tries
+        to connect to the container.
+        '''  
+        container = await client.containers.get(container.container_id)
+        await container.start()
+        
+        if not image.startup_script is None and len(image.startup_script) > 0:
+            script = ''.join([SCRIPTS_DIR, '/', image.startup_script])
+            execute_script = await container.exec(script, workdir=SCRIPTS_DIR)
+            stream = execute_script.start(detach=False)
+            while 1:
+                try:
+                    result = await stream.read_out()
+                    logging.debug(result)
+                except aiohttp.streams.EofStream:
+                    break
+            await stream.close()
+        
+        await container.stop()    
+        
