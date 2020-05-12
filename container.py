@@ -24,7 +24,9 @@ CONTAINER_STARTED = 1
 CONTAINER_STOPPED = 3
 SCRIPTS_DIR = '/scripts'
 
-class RunningContainer(object):
+
+class ProxiedContainer(object):
+    running_containers = 0
 
     def __init__(self, container):
         self.last_seen = datetime.now()
@@ -40,6 +42,7 @@ class RunningContainer(object):
         one call to the API
         '''
         client = None
+
         try:
             client = await pool.get()
             async with client._query('containers/{}/start'.format(self.container_id),
@@ -49,11 +52,12 @@ class RunningContainer(object):
                     if response.status == 304:
                         logging.debug(
                             '%s container is already running', self.name)
+                    else:
+                        logging.debug('Container %s is running', self.name)
                     self.status = CONTAINER_STARTED
                 else:
                     logging.error(
                         'Unable to start the container %s %s', self.name, response.status)
-                    self.status = CONTAINER_STOPPED
         except Exception as ex:
             logging.error(ex)
         finally:
@@ -121,23 +125,24 @@ class ContainerManager:
 
     def __init__(self, config):
         self.client_pool = asyncio.Queue(config.container_manager.client_pool)
-
-        for _ in range(config.container_manager.client_pool):
-            self.client_pool.put_nowait(aiodocker.Docker())
-
         self.container_map_by_port = None
         self.container_map_by_ip = None
         self.container_map_by_name = None
-        self.running_containers = {}
+        self.containers = {}
         self.config = config
         self.idle_monitor_task = None
         self.connections = ContainerConnectionMapping()
-  
-    def start(self):
+        self.running_containers = 0
+
+    async def start(self, create_pool=True):
         '''
         Loads the containers into dictionaries for fast retrieval
         '''
         logging.info('Starting container manager')
+
+        for _ in range(self.config.container_manager.client_pool):
+            await self.client_pool.put(aiodocker.Docker())
+
         self.container_map_by_port, self.container_map_by_ip, self.container_map_by_name = self.build_container_map()
 
     async def stop(self):
@@ -161,28 +166,31 @@ class ContainerManager:
         while 1:
             try:
                 await asyncio.sleep(poll_time)
-                for key in list(self.running_containers.keys()):
-                    container = self.running_containers[key]
+                stopped = 0
+                logging.info('%s running containers', self.running_containers)
+                for key, container in list(self.containers.items()):
                     if container.status == CONTAINER_STARTED:
                         last_seen = (datetime.now() -
                                      container.last_seen).total_seconds()
-                        if last_seen > expire_after:
+                        if last_seen >= expire_after:
                             try:
-                                # Don't let the container be started or stopped while
-                                # trying to stop
+                                # Don't let the container be started or stopped by another
+                                # task while trying to stop.
                                 container.event.clear()
                                 await container.stop_container(self.client_pool)
-                                del self.running_containers[key]
-                                logging.info(
-                                    'Container %s stopped', container.name)
+                                if container.status == CONTAINER_STOPPED:
+                                    del self.containers[key]
+                                    self.running_containers = self.running_containers - 1
                             finally:
                                 container.event.set()
+                        stopped = stopped + 1
+                    # Limit the number of containers stopped per iteration of the idle monitor
+                    # loop
+                    if stopped == self.config.container_manager.stop_per_iteration:
+                        break
 
-                logging.info('There are %s running containers',
-                             len(self.running_containers))
-
-                if len(self.running_containers) == 0:
-                    logging.debug(
+                if self.running_containers == 0:
+                    logging.info(
                         'Stopping container monitor, there are no containers to monitor')
                     return
 
@@ -192,19 +200,15 @@ class ContainerManager:
     async def start_if_not_running(self, ip, port, protocol):
         logging.debug('Connection request %s %s', ip, port)
 
-        if len(self.running_containers) > 40:
-            logging.info('Limiting to 40 running containers')
-            return None
-
         container = self.get_container_by_endpoint(ip, port, protocol)
 
         if container is None:
             return None
 
-        if not container.name in self.running_containers:
-            running_container = RunningContainer(container)
+        if not container.name in self.containers:
+            running_container = ProxiedContainer(container)
         else:
-            running_container = self.running_containers[container.name]
+            running_container = self.containers[container.name]
             # Wait until a stop or start is done with this container
             # by another task
             await running_container.event.wait()
@@ -217,10 +221,13 @@ class ContainerManager:
                 # wait. It goes in as stopped but will change to started when
                 # finished. If the container fails to start it will be stopped
                 # and the new task waiting will try to start it
-                self.running_containers[container.name] = running_container
+                self.containers[container.name] = running_container
                 running_container.event.clear()
-                logging.info('Starting container %s', container.name)
                 await running_container.start_container_if_not_running(self.client_pool)
+                if running_container.status == CONTAINER_STOPPED:
+                    del self.containers[container.name]
+                else:
+                    self.running_containers = self.running_containers + 1
             finally:
                 # Let someone do something with this container
                 running_container.event.set()
@@ -234,7 +241,7 @@ class ContainerManager:
             logging.debug('Container is %s already running %s',
                           container.name, running_container.status)
             assert running_container.status == CONTAINER_STARTED
-            self.running_containers[container.name].last_seen = datetime.now()
+            self.containers[container.name].last_seen = datetime.now()
 
         return container
 
@@ -242,8 +249,8 @@ class ContainerManager:
         '''
         Updates the running container by name
         '''
-        if container_name in self.running_containers:
-            self.running_containers[container_name].last_seen = datetime.now()
+        if container_name in self.containers:
+            self.containers[container_name].last_seen = datetime.now()
 
     def get_port_map_key(self, port, protocol):
         return int(''.join([str(protocol), str(port)]))
@@ -329,7 +336,8 @@ class ContainerBuilder:
         '''
         containers = Container.select()
         for container in containers:
-            print('{} {}'.format(container.name, container.ip))
+            print('{}.{}.{}\t\t{}'.format(container.name,
+                                          container.sub_domain, self.config.network.domain, container.ip))
 
     async def pull_image(self, image_name, existing_images):
         '''
@@ -365,13 +373,14 @@ class ContainerBuilder:
 
         existing_images = await client.images.list()
 
-        # If updating an existing deployment then create a list of 
+        # If updating an existing deployment then create a list of
         # existing ports
         if update:
             existing_ports = Port.select(Port.number).distinct()
-        
+
             for existing_port in existing_ports:
-                port = ExposedPort(existing_port.number, '{}/tcp'.format(existing_port.number), TCP_PROTOCOL)
+                port = ExposedPort(
+                    existing_port.number, '{}/tcp'.format(existing_port.number), TCP_PROTOCOL)
                 unique_ports[existing_port.number] = port
 
         # Pull down images defined in the images if they are
@@ -424,7 +433,6 @@ class ContainerBuilder:
         if update:
             existing_addresses = Container.select(Container.ip).distinct()
             count = count + len(existing_addresses)
-
 
         network_cfg = self.config.network
         logging.info('Creating network %s for %s hosts',
@@ -488,7 +496,7 @@ class ContainerBuilder:
         Deletes the containers in docker and the db records
         '''
         logging.info('Deleting containers')
-        
+
         client = aiodocker.Docker()
 
         containers = await client.containers.list(all=True)
@@ -508,9 +516,9 @@ class ContainerBuilder:
             port.delete_instance()
 
         await client.close()
-    
+
     async def create_containers(self, update):
-        # Clean up all the containers 
+        # Clean up all the containers
         if not update:
             await self.delete_containers()
 
@@ -552,48 +560,35 @@ class ContainerBuilder:
                           'ExposedPorts': ports,
                           'MacAddress': mac,
                           'Env': image.env_variables,
-                          'HostConfig': {
-                              'Mounts': [
-                                  {
-                                      "Type": "bind",
-                                      "Source": scripts_dir,
-                                      "Target": SCRIPTS_DIR,
-                                  }
-                              ],
-                          },
-                          "Mounts": [
-                              {
-                                  "Type": "bind",
-                                  "Source": scripts_dir,
-                                  "Destination": SCRIPTS_DIR,
-                                  "Mode": "",
-                                  "RW": 'true',
-                                  "Propagation": "rprivate"
-                              }
-                          ],
                           'NetworkingConfig': {
                               'EndpointsConfig': {
                                   'clab': {
                                       'IPAMConfig': {
                                           'IPv4Address': ip,
-                                      },
-                                  }
-                              }
-                          }
+                                    },
+                                }
+                            }
+                        }
+                }
+
+                if not image.startup_script is None and len(image.startup_script) > 0:
+                    config['HostConfig'] = {
+                              'Binds': ['{}:{}'.format(scripts_dir, SCRIPTS_DIR)
+                              ],
                           }
 
                 logging.debug('Creating container %s:%s',
                               host_name, image.name)
-                container = await client.containers.create(config, name=host_name)
+                container=await client.containers.create(config, name = host_name)
 
                 # Persist the container info to the db with the ports
                 # Ports are used to determine what listeners to create
-                new_container = Container.create(container_id=container.id,
-                                                 name=host_name, ip=ip, mac=mac,
-                                                 start_delay=image.start_delay,
-                                                 start_retry_count=image.start_retry_count,
-                                                 start_on_create=image.start_on_create,
-                                                 sub_domain=image.sub_domain)
+                new_container=Container.create(container_id = container.id,
+                                                 name = host_name, ip = ip, mac = mac,
+                                                 start_delay = image.start_delay,
+                                                 start_retry_count = image.start_retry_count,
+                                                 start_on_create = image.start_on_create,
+                                                 sub_domain = image.sub_domain)
 
                 # Some containers perform a lot of startup work when run for the first time
                 # To mitigate this containers can be started and stopped on creation
@@ -601,7 +596,7 @@ class ContainerBuilder:
                     await self.start_container_on_create(image, new_container, client)
 
                 for port in image_ports[image.name]:
-                    Port.create(container=new_container.id,
+                    Port.create(container = new_container.id,
                                 number=port.num, protocol=port.protocol)
 
         await client.close()
@@ -612,10 +607,10 @@ class ContainerBuilder:
         scripts. Some containers such as mysql create the db on first start so
         this option allows this initialization to occur before the proxy tries
         to connect to the container.
-        '''  
+        '''
         container = await client.containers.get(container.container_id)
         await container.start()
-        
+
         if not image.startup_script is None and len(image.startup_script) > 0:
             script = ''.join([SCRIPTS_DIR, '/', image.startup_script])
             execute_script = await container.exec(script, workdir=SCRIPTS_DIR)
@@ -627,6 +622,5 @@ class ContainerBuilder:
                 except aiohttp.streams.EofStream:
                     break
             await stream.close()
-        
-        await container.stop()    
-        
+
+        await container.stop()

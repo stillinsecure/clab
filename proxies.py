@@ -20,9 +20,11 @@ class ContainerProxy:
         '''
         Starts the proxy server on the specified loop
         '''
-        logging.info('Starting the container proxy server')
+        logging.info('Starting the container proxy server on %s', self.endpoint)
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.bind(('0.0.0.0', self.endpoint.port))
+        # This option allows multiple processes to listen on the same port
+        # server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        server_socket.bind(('0.0.0.0', int(self.endpoint.port)))
         return asyncio.start_server(self.client_connected,
                                            sock=server_socket,
                                            loop=loop)
@@ -74,27 +76,6 @@ class ContainerProxy:
         start_data = None
         remote_writer = None
         
-        # Retina discovery scan sends 0 bytes and will make it past the read
-        # below and start a container. Could be to read the banner
-
-        # Responds to scans without starting a container
-
-        #   nmap SYN will not get in here.
-        #   OS responds with RST packet
-
-        # - nmap ping scan will be handled by ICMP handler
-        #   nmap -sn
-
-        # - nmap connect scan will throw a connection reset error on the start data read after
-        #   it sends a RST packet
-        #   nmap -sT
-
-        # - nmap SYN, NULL, FIN, XMAS scan will not get here but will show up in NFQUEUE
-        #   nmap -sS, nmap -sN, nmap -sF, nmap -sX. No packets will be sent in response
-
-        # - nmap ACK,WINDOW, Maimom scan will not get in here but OS will send RST packet
-        #   nmap -sA, nmap -sW, nmap -sM
-
         # Read a bit of data to see if this is just a scanner
         try:
             source_addr = client_writer.get_extra_info('peername')

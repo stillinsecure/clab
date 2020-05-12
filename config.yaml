@@ -1,51 +1,35 @@
 images:
-- name: osixia/openldap:1.3.0
-  desc: ldap
-  count: 1
-  start_on_create: True
-  sub_domain: ldap 
-  
-#- name: gotechnies/alpine-ssh:latest
-#  desc: alpine
-#  count: 100
-#  start_on_create: True
-#  sub_domain: alpine.research1 
-#  startup_script: create_users_alpine.sh alpine_users.csv
+- name: gotechnies/alpine-ssh:latest
+  desc: research
+  count: 10
+  start_on_create: true
+  sub_domain: alpine.research1 
+  startup_script: create_users_alpine.sh alpine_users.csv
 
-#- name: rastasheep/ubuntu-sshd
-#  desc: ubuntu
-#  count: 1
+#- name: postgres:latest
+#  desc: Postgres
+#  count: 25
 #  start_on_create: True
-#  sub_domain: ubuntu.research1 
-#  startup_script: create_users.sh users.csv
-
+#  sub_domain: postgres.db 
+#  env_variables:
+#  - 'POSTGRES_PASSWORD=mysecretpassword'
 
 #- name: mcr.microsoft.com/mssql/server:2017-latest
 #  desc: SQL Server
-#  count: 10
-#  start_on_create: True
-#  sub_domain: mssql.research1 
+#  count: 25
+#  sub_domain: mssql.db 
+#  start_delay: 2
 #  env_variables:
 #  - 'ACCEPT_EULA=Y'
 #  - 'SA_PASSWORD=yourStrong(!)Password'
 
-#- name: iliyan/docker-nginx-sshd:latest
-#  desc: research
-#  count: 1
-#  start_on_create: True
-#  sub_domain: www.research1 
-
-#- name: jdeathe/centos-ssh-mysql:latest
-#  desc: research
-#  count: 1
-#  start_on_create: True
-#  sub_domain: mysql.research1 
-
-#- name: osixia/openldap:1.3.0
-#  desc: research
-#  count: 1 
-#  start_on_create: True
-#  sub_domain: ldap.research1 
+#- name: mysql:latest
+#  desc: MySQL
+#  count: 10
+#  sub_domain: mysql.db 
+#  start_delay: 2
+#  env_variables:
+#  - 'MYSQL_ROOT_PASSWORD=my-secret-pw'
 
 naming:
   allowable_host_chars: '[^a-z0-9]'
@@ -59,14 +43,16 @@ container_network:
   domain: acmehosting.com
   
 firewall:
-  queue_num: "0"
+  queue_num: 0
   interface: lo
   proxy_port: 5996
   chain_name: CLAB
   read_buffer: 1024
+  instances: 2
 
 container_manager:
   client_pool: 25
-  max_containers: 40
+  max_containers: 20
   poll_time: 1
-  expire_after: 20
+  expire_after: 5
+  stop_per_iteration: 1

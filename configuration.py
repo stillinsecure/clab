@@ -79,7 +79,8 @@ class FirewallConfig(BaseConfig):
         self.max_containers = self.get_config_setting('max_containers', 40)
         self.read_buffer = self.get_config_setting('read_buffer', 1024)
         self.read_client = self.get_config_setting('read_client', False)
-
+        self.instances = self.get_config_setting('instances')
+        
     def get_interface_ip(self):
         """
         Returns the IP address assigned to the interface specified in the
@@ -159,7 +160,7 @@ class ImageConfig(BaseConfig):
         self.sub_domain = self.get_config_setting('sub_domain', '')
         self.env_variables = self.get_config_setting('env_variables', [])
         self.startup_script = self.get_config_setting('startup_script', '')
-
+        
 class NamingConfig(BaseConfig):
 
     def __init__(self, cfg_dict):
@@ -189,7 +190,8 @@ class ContainerManagerConfig(BaseConfig):
         self.max_containers = self.get_config_setting('max_containers', 50)
         self.poll_time = self.get_config_setting('poll_time', 1)
         self.expire_after = self.get_config_setting('expire_after')
-
+        self.stop_per_iteration = self.get_config_setting('stop_per_iteration')
+        
 class ConfigurationException(Exception):
     pass
 

@@ -1,5 +1,6 @@
 #!/bin/bash
 
+touch $1
 user_names=($(shuf -n 10 user_names.txt))
 ip_addresses=($(hostname -i))
 

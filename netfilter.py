@@ -94,29 +94,36 @@ class IPTableRules:
         if tcp_ports is not None and len(tcp_ports) > 0:
             # Rule to send SYN packets to the NFQUEUE to track the container
             # destination as well as act as a firewall to drop packets destined
-            # for services or containers that do not exist
+            # for services or containers that do not exist            
             tcp_rule = iptc.Rule()
             tcp_rule.dst = clab_network
             tcp_rule.protocol = TCP_PROTOCOL_TXT
             state_match = tcp_rule.create_match('tcp')
-            state_match.tcp_flags = 'SYN'
+            state_match.set_parameter('syn')
             multiport_match = tcp_rule.create_match('multiport')
             multiport_match.dports = ','.join(tcp_ports)
             queue_target = tcp_rule.create_target(IPTABLES_NFQUEUE)
-            queue_target.set_parameter(
-                IPTABLES_QUEUE_NUM, self.config.firewall.queue_num)
+
+            if self.config.firewall.instances == 1:
+                queue_target.set_parameter(IPTABLES_QUEUE_NUM, self.config.firewall.queue_num)
+            else:
+                queue_target.set_parameter('queue-balance', '0:{}'.format(self.config.firewall.instances-1))
 
             mangle_clab_chain.insert_rule(tcp_rule)
 
             # Rule to send all traffic to the proxy
-            tcp_rule = iptc.Rule()
-            tcp_rule.dst = clab_network
-            tcp_rule.protocol = TCP_PROTOCOL_TXT
-            multiport_match = tcp_rule.create_match('multiport')
-            multiport_match.dports = ','.join(tcp_ports)
-            redirect_target = tcp_rule.create_target('REDIRECT')
-            redirect_target.set_parameter('to-ports', str(self.config.firewall.proxy_port))
-            nat_clab_chain.insert_rule(tcp_rule)
+            for instance in range(0, self.config.firewall.instances):
+                tcp_rule = iptc.Rule()
+                tcp_rule.dst = clab_network
+                tcp_rule.protocol = TCP_PROTOCOL_TXT
+                mark_match = tcp_rule.create_match('mark')
+                mark_match.mark = str(instance)
+                multiport_match = tcp_rule.create_match('multiport')
+                multiport_match.dports = ','.join(tcp_ports)
+                redirect_target = tcp_rule.create_target('REDIRECT')
+                redirect_target.set_parameter('to-ports', str(self.config.firewall.proxy_port + instance))
+                nat_clab_chain.insert_rule(tcp_rule)
+
 
         # Rule to send all icmp traffic for containers to the NFQUEUE
         icmp_rule = iptc.Rule()
@@ -124,7 +131,7 @@ class IPTableRules:
         icmp_rule.protocol = ICMP_PROTOCOL_TXT
         icmp_target = icmp_rule.create_target(IPTABLES_NFQUEUE)
         icmp_target.set_parameter(
-            IPTABLES_QUEUE_NUM, self.config.firewall.queue_num)
+            'queue-balance', '0:{}'.format(self.config.firewall.instances-1))
         mangle_clab_chain.insert_rule(icmp_rule)
         
         # Create a rule to send traffic to the CLAB chain from
@@ -168,7 +175,8 @@ class ContainerFirewall:
         self.nfqueue.bind(int(self.queue_num), self.process_packet)
         self.nfq_socket = socket.fromfd(
             self.nfqueue.get_fd(), socket.AF_UNIX, socket.SOCK_STREAM)
-
+        # nfqueue_runsocket will block if the socket is set to block
+        self.nfq_socket.setblocking(False)
         # Register the file descriptor for read event
         loop.add_reader(self.nfq_socket, self.reader)
 
@@ -179,28 +187,28 @@ class ContainerFirewall:
             self.nfq_socket.close()
 
     def reader(self):
-        self.nfqueue.get_packet(self.nfq_socket)
-
+        self.nfqueue.run_socket(self.nfq_socket)
+    
     def process_packet(self, pkt):
         ip_hdr = ip.IP(pkt.get_payload())
         dst_ip = Net.ipbytes_to_int(ip_hdr.dst)
         src_ip = Net.ipbytes_to_int(ip_hdr.src)
 
         if ip_hdr.p == ip.IP_PROTO_TCP:
-            tcp_hdr = ip_hdr.data
+            tcp_hdr = ip_hdr.data  
             # See if there is a container registered to the specified dst and port
             container = self.container_mgr.get_container_by_endpoint(
                 dst_ip, tcp_hdr.dport, 6)
 
             # Only track if this is for a container
             if container is not None:
-                logging.debug(
-                    'TCPHandler.process_packet(tcp): Found container %s', container.name)
+                logging.debug('Found container %s', container.name)
 
                 # Store the dst address of the docker container so that
                 # when the connection is made to the proxy the proxy knows
                 # what container to start
                 self.container_mgr.connections.add(src_ip, tcp_hdr.sport, dst_ip, tcp_hdr.dport)
+                pkt.set_mark(int(self.queue_num))
                 pkt.accept()
             else:
                 pkt.drop()
