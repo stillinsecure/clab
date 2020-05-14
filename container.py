@@ -133,6 +133,7 @@ class ContainerManager:
         self.idle_monitor_task = None
         self.connections = ContainerConnectionMapping()
         self.running_containers = 0
+        self.container_map_by_port, self.container_map_by_ip, self.container_map_by_name = self.build_container_map()
 
     async def start(self, create_pool=True):
         '''
@@ -142,8 +143,6 @@ class ContainerManager:
 
         for _ in range(self.config.container_manager.client_pool):
             await self.client_pool.put(aiodocker.Docker())
-
-        self.container_map_by_port, self.container_map_by_ip, self.container_map_by_name = self.build_container_map()
 
     async def stop(self):
         '''

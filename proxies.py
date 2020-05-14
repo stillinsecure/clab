@@ -20,7 +20,7 @@ class ContainerProxy:
         '''
         Starts the proxy server on the specified loop
         '''
-        logging.info('Starting the container proxy server on %s', self.endpoint)
+        logging.info('Starting the container proxy server on %s', self.endpoint.port)
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # This option allows multiple processes to listen on the same port
         # server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)

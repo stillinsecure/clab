@@ -49,8 +49,8 @@ class ContainerResolver(BaseResolver):
 
 class ContainerDnsServer(object):
 
-    def __init__(self, ctr_mgr, domain_name):
-        resolver = ContainerResolver(ctr_mgr, domain_name)
+    def __init__(self, container_map, domain_name):
+        resolver = ContainerResolver(container_map, domain_name)
         self.server = dnslib.server.DNSServer(
             resolver=resolver, logger=DNSLogger("pass"))
         logging.info('Starting container DNS server')
