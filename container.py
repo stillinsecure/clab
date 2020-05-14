@@ -421,17 +421,12 @@ class ContainerBuilder:
         await client.close()
         return count, image_ports, unique_ports.values()
 
-    async def create_network(self, count, update):
+    async def create_network(self, count, subnet, gateway):
         '''
         Creates a docker network with a subnet to match the number of
         containers specified by count
         '''
         client = aiodocker.Docker()
-
-        # If updating, ensure that the existing container count is included
-        if update:
-            existing_addresses = Container.select(Container.ip).distinct()
-            count = count + len(existing_addresses)
 
         network_cfg = self.config.network
         logging.info('Creating network %s for %s hosts',
@@ -444,33 +439,8 @@ class ContainerBuilder:
         except aiodocker.DockerError:
             pass
 
-        # Add three to the number of containers to account for the gateway,
-        # network, broadcast address
-        subnet = utility.Net.generate_cidr(network_cfg.address, count + 3)
+     
 
-        ip = netaddr.IPNetwork(subnet)
-
-        # Calc the gateway as network address + 1
-        gateway = utility.Net.ipint_to_str(ip.first + 1)
-
-        # Broadcast is the last
-        broadcast = utility.Net.ipint_to_str(ip.last)
-
-        addresses = [str(address)
-                     for address in list(netaddr.IPSet([subnet, ]))]
-
-        if gateway in addresses:
-            addresses.remove(gateway)
-        if broadcast in addresses:
-            addresses.remove(broadcast)
-        if network_cfg.address in addresses:
-            addresses.remove(network_cfg.address)
-
-        # When upgrading remove existing addresses from the pool
-        if update:
-            for existing_address in existing_addresses:
-                if existing_address.ip in addresses:
-                    addresses.remove(existing_address.ip)
 
         # default is bridge
         config = {'Name': network_cfg.name, 'IPAM': {
@@ -485,10 +455,8 @@ class ContainerBuilder:
                   }
 
         network = await client.networks.create(config)
-        logging.info('Created network %s %s %s %s -> %s', network_cfg.name, subnet,
-                     ip.hostmask, utility.Net.ipint_to_str(ip.first), utility.Net.ipint_to_str(ip.last))
+        logging.info('Created network %s %s', network_cfg.name, subnet)            
         await client.close()
-        return network, addresses, subnet
 
     async def delete_containers(self):
         '''
@@ -516,6 +484,35 @@ class ContainerBuilder:
 
         await client.close()
 
+    def get_available_address(self, count):
+        # Add three to the number of containers to account for the gateway,
+        # network, broadcast address
+        subnet = utility.Net.generate_cidr(self.config.network.address, count + 3)
+
+        ip = netaddr.IPNetwork(subnet)
+
+        # Calc the gateway as network address + 1
+        gateway = utility.Net.ipint_to_str(ip.first + 1)
+
+        # Broadcast is the last
+        broadcast = utility.Net.ipint_to_str(ip.last)
+
+        addresses = [str(address)
+                     for address in list(netaddr.IPSet([subnet, ]))]
+
+        if gateway in addresses:
+            addresses.remove(gateway)
+        if broadcast in addresses:
+            addresses.remove(broadcast)
+        if self.config.network.address in addresses:
+            addresses.remove(self.config.network.address)
+
+        # Remove existing addresses
+        for container in Container.select(Container.ip):
+            addresses.remove(container.ip)
+
+        return addresses, subnet, gateway
+
     async def create_containers(self, update):
         # Clean up all the containers
         if not update:
@@ -524,13 +521,20 @@ class ContainerBuilder:
         # Make sure the defined images are available and config the ports
         count, image_ports, unique_ports = await self.setup_images(self.config.images, update)
 
-        # Create a network for the containers
-        _network, addresses, subnet = await self.create_network(count, update)
+        addresses, subnet, gateway = self.get_available_address(self.config.network.hosts)
 
-        # Apply the iptable rules required for the configured images
-        rules = IPTableRules(self.config)
-        rules.create(subnet, unique_ports)
+        # Do not recreate the network during an update. docker does not provide a 
+        # way to update the network so during an update it would need to be dropped and
+        # updated. The network id for any existing containers would need to be updated
+        if not update:
+            # Create a network for the containers
+            await self.create_network(self.config.network.hosts, subnet, gateway)
 
+            # Apply the iptable rules required for the configured images
+            rules = IPTableRules(self.config)
+            rules.create(subnet, unique_ports)
+
+       
         logging.info('Creating containers')
 
         # Create a unique list of host names
@@ -552,7 +556,7 @@ class ContainerBuilder:
             ports = dict.fromkeys(ports, {})
             for count in range(image.count):
                 host_name = host_names.pop()
-                ip = addresses.pop()
+                ip = addresses.pop(0)
                 mac = utility.Net.generate_mac(ip)
                 config = {'Hostname': host_name,
                           'Image': image.name,

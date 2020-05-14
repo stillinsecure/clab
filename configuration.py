@@ -110,7 +110,7 @@ class NetworkConfig(BaseConfig):
         self.address = self.get_config_setting('address')
         self.name = self.get_config_setting('name')
         self.domain = self.get_config_setting('domain')
-
+        self.hosts = self.get_config_setting('hosts')
 
 class ImagesConfig(BaseConfig):
 

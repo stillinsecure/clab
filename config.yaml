@@ -39,6 +39,7 @@ naming:
 
 container_network:
   address: 10.0.0.0
+  hosts: 10000
   name: clab
   domain: acmehosting.com
   

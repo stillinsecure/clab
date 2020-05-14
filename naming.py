@@ -1,5 +1,6 @@
 import re
 import random
+from models import Container
 
 class Naming:
 
@@ -7,8 +8,11 @@ class Naming:
         pass
 
     def generate_host_names(self, naming_cfg, count):
-        unique_hosts = dict()
-        names = []
+        
+        containers = Container.select(Container.name)
+
+        unique_hosts = {}
+       
         with open(naming_cfg.word_file, "r") as f:
             array = []
             for line in f:
@@ -17,11 +21,12 @@ class Naming:
                 if word_len >= naming_cfg.min_host_len and \
                                 word_len <= naming_cfg.max_host_len:
                     array.append(word)
+        
             while len(unique_hosts) < count:
                 index = random.randint(1, len(array))
                 name = array[index-1]
-                if not name in unique_hosts:
-                    unique_hosts[name] = 0
-                    names.append(name)
-            return names
+                if not name in unique_hosts and name not in containers:
+                    unique_hosts[name] = name
+
+            return list(unique_hosts)
 
