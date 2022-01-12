@@ -8,7 +8,7 @@ backcall==0.1.0
 chardet==3.0.4
 Cython==0.29.16
 decorator==4.4.2
-dnslib==0.9.12
+dnslib==0.9.17
 dpkt==1.9.2
 idna==2.9
 ipython==7.13.0
